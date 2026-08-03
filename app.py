@@ -27,7 +27,7 @@ from favorable_launch_finder import (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Wind Trajectory", version="3.3.0")
+app = FastAPI(title="Wind Trajectory", version="3.3.1")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -82,16 +82,15 @@ def ensure_utc(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+def trajectory_grid_radius_km(_: float) -> float:
+    # Один и тот же пространственный wind-field для 6/12/24/48/72/168 ч.
+    # Иначе изменение радиуса сетки меняет точки интерполяции и две
+    # траектории с одинаковым начальным условием начинают расходиться.
+    return 1200.0
+
+
 def grid_radius_for_duration(duration_hours: float) -> float:
-    if duration_hours <= 12:
-        return 250
-    if duration_hours <= 24:
-        return 400
-    if duration_hours <= 48:
-        return 600
-    if duration_hours <= 72:
-        return 800
-    return 1200
+    return trajectory_grid_radius_km(duration_hours)
 
 
 def serialize_candidate(c: LaunchCandidate) -> dict:
@@ -166,7 +165,7 @@ async def create_trajectory(request: TrajectoryRequest):
     try:
         start_time = ensure_utc(request.start_time)
         end_time = start_time + timedelta(hours=request.duration_hours)
-        radius = grid_radius_for_duration(request.duration_hours)
+        radius = trajectory_grid_radius_km(request.duration_hours)
         latitudes, longitudes = build_grid(request.start.lat, request.start.lon, radius)
         forecast = await fetch_grid(latitudes=latitudes, longitudes=longitudes, start=start_time, end=end_time)
         parameters = FlightParameters(
@@ -195,25 +194,10 @@ async def create_backtrajectory(request: BackTrajectoryRequest):
         weather.download(detection=detection, max_hours=duration_hours, max_ascent_rate_mps=15.0)
         balloon = BalloonModel(ascent_rate_mps=ascent_rate_mps, ascent_rate_sigma_mps=0.7)
         solver = BackTrajectorySolver(weather=weather, balloon=balloon, step_seconds=step_seconds, max_duration_hours=duration_hours)
-        estimator = EnsembleEstimator(
-            solver=solver, members=request.members, wind_sigma_mps=1.5,
-            detection_time_sigma_s=60.0, altitude_sigma_m=50.0, seed=42,
-        )
+        estimator = EnsembleEstimator(solver=solver, members=request.members, wind_sigma_mps=1.5, detection_time_sigma_s=60.0, altitude_sigma_m=50.0, seed=42)
         result = estimator.run(detection)
         representative = result.trajectories[0] if result.trajectories else []
-        return {
-            "status": "ok",
-            "result": {
-                "detection": result.detection,
-                "launch_estimate": result.launch_estimate,
-                "zones": result.zones,
-                "ensemble_size": result.ensemble_size,
-                "valid_members": result.valid_members,
-                "trajectories": result.trajectories,
-                "trajectory": representative,
-                "points": representative,
-            },
-        }
+        return {"status": "ok", "result": {"detection": result.detection, "launch_estimate": result.launch_estimate, "zones": result.zones, "ensemble_size": result.ensemble_size, "valid_members": result.valid_members, "trajectories": result.trajectories, "trajectory": representative, "points": representative}}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -231,21 +215,8 @@ async def create_favorable(request: FavorableRequest):
         mid_lat = (request.launch_center.lat + request.target.lat) / 2.0
         mid_lon = (request.launch_center.lon + request.target.lon) / 2.0
         latitudes, longitudes = build_grid(mid_lat, mid_lon, radius)
-        forecast = await fetch_grid(
-            latitudes=latitudes, longitudes=longitudes, start=search_start,
-            end=search_end + timedelta(hours=request.duration_hours),
-        )
-        windows = find_favorable_conditions(
-            target=GeoPoint(lat=request.target.lat, lon=request.target.lon),
-            launch_center=GeoPoint(lat=request.launch_center.lat, lon=request.launch_center.lon),
-            forecast=forecast, search_start=search_start, search_end=search_end,
-            launch_radius_m=request.launch_radius_m, radius_tolerance_m=request.radius_tolerance_m,
-            time_step_hours=request.time_step_hours, window_half_width_hours=request.window_half_width_hours,
-            max_acceptable_distance_m=request.max_acceptable_distance_m, ascent_rate=request.ascent_rate,
-            max_altitude=request.max_altitude, duration_hours=request.duration_hours,
-            step_minutes=request.step_minutes, start_altitude=request.start_altitude,
-            points_per_circle=request.points_per_circle, interpolate_wind=interpolate_wind,
-        )
+        forecast = await fetch_grid(latitudes=latitudes, longitudes=longitudes, start=search_start, end=search_end + timedelta(hours=request.duration_hours))
+        windows = find_favorable_conditions(target=GeoPoint(lat=request.target.lat, lon=request.target.lon), launch_center=GeoPoint(lat=request.launch_center.lat, lon=request.launch_center.lon), forecast=forecast, search_start=search_start, search_end=search_end, launch_radius_m=request.launch_radius_m, radius_tolerance_m=request.radius_tolerance_m, time_step_hours=request.time_step_hours, window_half_width_hours=request.window_half_width_hours, max_acceptable_distance_m=request.max_acceptable_distance_m, ascent_rate=request.ascent_rate, max_altitude=request.max_altitude, duration_hours=request.duration_hours, step_minutes=request.step_minutes, start_altitude=request.start_altitude, points_per_circle=request.points_per_circle, interpolate_wind=interpolate_wind)
         return {"status": "ok", "count": len(windows), "windows": [serialize_window(w) for w in windows]}
     except HTTPException:
         raise
@@ -257,10 +228,4 @@ async def create_favorable(request: FavorableRequest):
 
 @app.get("/api/config")
 async def config():
-    return {
-        "backtrajectory": {"duration_hours": 4.0, "step_seconds": 60.0, "members": 100},
-        "favorable": {
-            "default_launch_radius_m": 1000.0, "default_window_half_width_hours": 3.0,
-            "default_time_step_hours": 1.0, "default_max_acceptable_distance_m": 5000.0,
-        },
-    }
+    return {"max_trajectory_hours": 168, "default_step_minutes": 10}
