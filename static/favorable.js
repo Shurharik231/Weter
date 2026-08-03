@@ -1,5 +1,6 @@
-// Дополнительный модуль режима «Благоприятные условия».
-// Глобальные переменные нужны потому, что основной app.js обрабатывает клик карты.
+// Режим «Благоприятные условия».
+// Загружается перед основным script/app.js, поэтому handleMapClick
+// основного frontend видит эти глобальные переменные.
 var favMode = null;
 var favTargetLat = document.getElementById("fav-target-lat");
 var favTargetLon = document.getElementById("fav-target-lon");
@@ -11,22 +12,30 @@ var favLaunchMarker = null;
 function updateFavTargetMarker(lat, lon) {
     const m = typeof map !== "undefined" ? map : null;
     if (!m) return;
-    if (favTargetMarker) {
-        favTargetMarker.setLatLng([lat, lon]);
-    } else {
+    if (favTargetMarker) favTargetMarker.setLatLng([lat, lon]);
+    else {
         favTargetMarker = L.marker([lat, lon], { draggable: true }).addTo(m);
         favTargetMarker.bindPopup("Целевая точка");
+        favTargetMarker.on("dragend", () => {
+            const p = favTargetMarker.getLatLng();
+            if (favTargetLat) favTargetLat.value = p.lat.toFixed(6);
+            if (favTargetLon) favTargetLon.value = p.lng.toFixed(6);
+        });
     }
 }
 
 function updateFavLaunchMarker(lat, lon) {
     const m = typeof map !== "undefined" ? map : null;
     if (!m) return;
-    if (favLaunchMarker) {
-        favLaunchMarker.setLatLng([lat, lon]);
-    } else {
+    if (favLaunchMarker) favLaunchMarker.setLatLng([lat, lon]);
+    else {
         favLaunchMarker = L.marker([lat, lon], { draggable: true }).addTo(m);
         favLaunchMarker.bindPopup("Центр области запуска");
+        favLaunchMarker.on("dragend", () => {
+            const p = favLaunchMarker.getLatLng();
+            if (favLaunchLat) favLaunchLat.value = p.lat.toFixed(6);
+            if (favLaunchLon) favLaunchLon.value = p.lng.toFixed(6);
+        });
     }
 }
 
@@ -46,14 +55,16 @@ function setFavorableMode() {
     backPanel?.classList.add("hidden");
     favPanel?.classList.remove("hidden");
     if (label) label.textContent = "Благоприятные условия";
-    favMode = null;
+
+    // Не даём основному обработчику карты трактовать обычный клик
+    // как выбор точки прямой/обратной траектории.
+    if (typeof activeMode !== "undefined") activeMode = "favorable";
     if (typeof selectionMode !== "undefined") selectionMode = null;
+    favMode = null;
 }
 
 function validFavCoordinates(lat, lon) {
-    return Number.isFinite(Number(lat)) && Number.isFinite(Number(lon)) &&
-        Number(lat) >= -90 && Number(lat) <= 90 &&
-        Number(lon) >= -180 && Number(lon) <= 180;
+    return Number.isFinite(Number(lat)) && Number.isFinite(Number(lon)) && Number(lat) >= -90 && Number(lat) <= 90 && Number(lon) >= -180 && Number(lon) <= 180;
 }
 
 function setFavorableStatus(text, error = false) {
@@ -68,12 +79,10 @@ async function calculateFavorable() {
     const targetLon = Number(document.getElementById("fav-target-lon")?.value);
     const launchLat = Number(document.getElementById("fav-launch-lat")?.value);
     const launchLon = Number(document.getElementById("fav-launch-lon")?.value);
-
     if (!validFavCoordinates(targetLat, targetLon) || !validFavCoordinates(launchLat, launchLon)) {
         setFavorableStatus("Проверьте координаты цели и области запуска.", true);
         return;
     }
-
     const start = document.getElementById("fav-search-start")?.value;
     const end = document.getElementById("fav-search-end")?.value;
     if (!start || !end) {
@@ -84,7 +93,6 @@ async function calculateFavorable() {
     const button = document.getElementById("calculate-favorable");
     if (button) button.disabled = true;
     setFavorableStatus("Ищем благоприятные окна...");
-
     try {
         const payload = {
             target: { lat: targetLat, lon: targetLon },
@@ -103,34 +111,19 @@ async function calculateFavorable() {
             start_altitude: 0,
             points_per_circle: 7
         };
-
-        const response = await fetch("/api/favorable", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload)
-        });
+        const response = await fetch("/api/favorable", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         const data = await response.json();
         if (!response.ok) throw new Error(data.detail || `HTTP ${response.status}`);
 
         const results = document.getElementById("results");
         const content = document.getElementById("result-content");
         results?.classList.remove("hidden");
-
         if (!data.windows?.length) {
             if (content) content.innerHTML = "<div class='result-card'>Подходящих окон не найдено.</div>";
             setFavorableStatus("Расчёт завершён: подходящих окон не найдено.");
             return;
         }
-
-        if (content) {
-            content.innerHTML = data.windows.map((w, i) => `
-                <div class="result-card">
-                    <strong>Окно ${i + 1}: ${w.date || "—"}</strong>
-                    <div>Период: ${new Date(w.window_start).toLocaleString("ru-RU")} — ${new Date(w.window_end).toLocaleString("ru-RU")}</div>
-                    <div>Рекомендуемый запуск: ${new Date(w.recommended_time).toLocaleString("ru-RU")}</div>
-                    <div>Кандидатов: ${w.best_candidates?.length || 0}</div>
-                </div>`).join("");
-        }
+        if (content) content.innerHTML = data.windows.map((w, i) => `<div class="result-card"><strong>Окно ${i + 1}: ${w.date || "—"}</strong><div>Период: ${new Date(w.window_start).toLocaleString("ru-RU")} — ${new Date(w.window_end).toLocaleString("ru-RU")}</div><div>Рекомендуемый запуск: ${new Date(w.recommended_time).toLocaleString("ru-RU")}</div><div>Кандидатов: ${w.best_candidates?.length || 0}</div></div>`).join("");
 
         const first = data.windows[0]?.best_candidates?.[0];
         const points = first?.trajectory?.points || [];
@@ -152,18 +145,7 @@ async function calculateFavorable() {
 
 document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("tab-favorable")?.addEventListener("click", setFavorableMode);
-
-    document.getElementById("fav-set-target")?.addEventListener("click", () => {
-        setFavorableMode();
-        favMode = "target";
-        setFavorableStatus("Кликните по карте, чтобы установить целевую точку.");
-    });
-
-    document.getElementById("fav-set-launch")?.addEventListener("click", () => {
-        setFavorableMode();
-        favMode = "launch";
-        setFavorableStatus("Кликните по карте, чтобы установить центр области запуска.");
-    });
-
+    document.getElementById("fav-set-target")?.addEventListener("click", () => { setFavorableMode(); favMode = "target"; setFavorableStatus("Кликните по карте, чтобы установить целевую точку."); });
+    document.getElementById("fav-set-launch")?.addEventListener("click", () => { setFavorableMode(); favMode = "launch"; setFavorableStatus("Кликните по карте, чтобы установить центр области запуска."); });
     document.getElementById("calculate-favorable")?.addEventListener("click", calculateFavorable);
 });
