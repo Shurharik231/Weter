@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wind Trajectory</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Wind Trajectory</h1>
+      <p>Расчёт воздушной траектории по данным Open-Meteo</p>
+    </div>
+    <span id="health" class="status">Проверка...</span>
+  </header>
+
+  <main>
+    <section class="panel controls">
+      <h2>Параметры</h2>
+      <label>Широта <input id="lat" type="number" step="0.0001" value="52.2297"></label>
+      <label>Долгота <input id="lon" type="number" step="0.0001" value="21.0122"></label>
+      <label>Время старта <input id="start-time" type="datetime-local"></label>
+      <label>Начальная высота, м <input id="start-altitude" type="number" min="0" value="0"></label>
+      <label>Скорость подъёма, м/с <input id="ascent-rate" type="number" min="0" step="0.1" value="5"></label>
+      <label>Макс. высота, м <input id="max-altitude" type="number" min="0" value="10000"></label>
+      <label>Длительность, ч <input id="duration" type="number" min="0.1" max="168" step="0.5" value="24"></label>
+      <label>Шаг, мин <input id="step" type="number" min="1" max="60" value="10"></label>
+      <div class="buttons">
+        <button id="wind-btn">Текущий ветер</button>
+        <button id="trajectory-btn" class="primary">Рассчитать траекторию</button>
+      </div>
+      <div id="message" class="message"></div>
+      <div id="wind" class="result"></div>
+    </section>
+
+    <section class="panel map-panel">
+      <div id="map"></div>
+    </section>
+
+    <section class="panel result-panel">
+      <h2>Результат</h2>
+      <div id="summary">Выберите точку на карте или задайте координаты и запустите расчёт.</div>
+      <div class="table-wrap">
+        <table id="points-table">
+          <thead><tr><th>Время</th><th>Lat</th><th>Lon</th><th>Высота, м</th><th>Ветер, м/с</th><th>Направление, °</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
