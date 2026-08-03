@@ -9,217 +9,70 @@
 </head>
 <body>
 <div class="app">
-    <aside class="panel">
+    <aside class="panel sidebar">
         <h1>Wind Trajectory</h1>
-
         <div class="tabs">
-            <button id="tab-direct" class="active" type="button">
-                Прямая траектория
-            </button>
-            <button id="tab-back" type="button">
-                Обратная траектория
-            </button>
-            <button id="tab-favorable" type="button">
-                Благоприятные условия
-            </button>
+            <button id="tab-direct" class="active" type="button">Прямая траектория</button>
+            <button id="tab-back" type="button">Обратная траектория</button>
+            <button id="tab-favorable" type="button">Благоприятные условия</button>
         </div>
+        <div id="map-mode" class="map-mode">Прямая траектория</div>
 
-        <div id="map-mode">Прямая траектория</div>
-
-        <!-- ==================== ПРЯМАЯ ==================== -->
         <section id="direct-panel">
             <h2>📍 Точка старта</h2>
-
-            <button id="my-location" type="button">
-                Использовать моё местоположение
-            </button>
-
-            <label for="start-lat">
-                Широта
-                <input id="start-lat" type="number" step="0.000001" value="44.67">
-            </label>
-
-            <label for="start-lon">
-                Долгота
-                <input id="start-lon" type="number" step="0.000001" value="34.41">
-            </label>
-
-            <button id="set-start" type="button">
-                Установить точку
-            </button>
-
-            <p class="hint">
-                Можно кликнуть по карте, чтобы установить точку старта.
-            </p>
-
+            <button id="my-location" type="button">Использовать моё местоположение</button>
+            <label for="start-lat">Широта<input id="start-lat" type="number" step="0.000001" value="44.67"></label>
+            <label for="start-lon">Долгота<input id="start-lon" type="number" step="0.000001" value="34.41"></label>
+            <button id="set-start" type="button">Установить точку</button>
+            <p class="hint">Можно кликнуть по карте, чтобы установить точку старта.</p>
             <h2>⚙️ Параметры</h2>
-
-            <label for="start-time">
-                Время старта
-                <input id="start-time" type="datetime-local">
+            <label for="start-time">Время старта<input id="start-time" type="datetime-local"></label>
+            <label for="start-altitude">Высота старта, м<input id="start-altitude" type="number" min="0" step="1" value="0"></label>
+            <label for="ascent-rate">Скорость набора, м/с<input id="ascent-rate" type="number" min="0" step="0.1" value="5"></label>
+            <label for="max-altitude">Максимальная высота, м<input id="max-altitude" type="number" min="0" step="100" value="10000"></label>
+            <label for="duration">Продолжительность, ч
+                <select id="duration"><option value="6">6</option><option value="12">12</option><option value="24" selected>24</option><option value="48">48</option><option value="72">72</option><option value="168">168</option></select>
             </label>
-
-            <label for="start-altitude">
-                Высота старта, м
-                <input id="start-altitude" type="number" min="0" step="1" value="0">
-            </label>
-
-            <label for="ascent-rate">
-                Скорость набора, м/с
-                <input id="ascent-rate" type="number" min="0" step="0.1" value="5">
-            </label>
-
-            <label for="max-altitude">
-                Максимальная высота, м
-                <input id="max-altitude" type="number" min="0" step="100" value="10000">
-            </label>
-
-            <label for="duration">
-                Продолжительность, ч
-                <select id="duration">
-                    <option value="6">6</option>
-                    <option value="12">12</option>
-                    <option value="24" selected>24</option>
-                    <option value="48">48</option>
-                    <option value="72">72</option>
-                    <option value="168">168</option>
-                </select>
-            </label>
-
-            <button id="calculate-direct" class="primary" type="button">
-                Рассчитать маршрут
-            </button>
+            <button id="calculate-direct" class="primary" type="button">Рассчитать маршрут</button>
         </section>
 
-        <!-- ==================== ОБРАТНАЯ ==================== -->
         <section id="back-panel" class="hidden">
             <h2>🔙 Обратная траектория</h2>
-
-            <label for="back-lat">
-                Широта обнаружения
-                <input id="back-lat" type="number" step="0.000001" placeholder="Например: 44.670000">
-            </label>
-
-            <label for="back-lon">
-                Долгота обнаружения
-                <input id="back-lon" type="number" step="0.000001" placeholder="Например: 34.410000">
-            </label>
-
-            <button id="back-map-point" type="button">
-                Выбрать точку на карте
-            </button>
-
-            <p class="hint">
-                Нажмите кнопку, затем кликните по карте для выбора точки обнаружения.
-            </p>
-
-            <label for="back-altitude">
-                Высота обнаружения, м
-                <input id="back-altitude" type="number" min="0" step="1" value="10000">
-            </label>
-
-            <label for="back-time">
-                Дата и время обнаружения
-                <input id="back-time" type="datetime-local">
-            </label>
-
-            <button id="calculate-back" class="primary" type="button">
-                Рассчитать обратный маршрут
-            </button>
+            <label for="back-lat">Широта обнаружения<input id="back-lat" type="number" step="0.000001" placeholder="44.670000"></label>
+            <label for="back-lon">Долгота обнаружения<input id="back-lon" type="number" step="0.000001" placeholder="34.410000"></label>
+            <button id="back-map-point" type="button">Выбрать точку на карте</button>
+            <p class="hint">Нажмите кнопку, затем кликните по карте для выбора точки обнаружения.</p>
+            <label for="back-altitude">Высота обнаружения, м<input id="back-altitude" type="number" min="0" step="1" value="10000"></label>
+            <label for="back-time">Дата и время обнаружения<input id="back-time" type="datetime-local"></label>
+            <button id="calculate-back" class="primary" type="button">Рассчитать обратный маршрут</button>
         </section>
 
-        <!-- ==================== БЛАГОПРИЯТНЫЕ ==================== -->
         <section id="favorable-panel" class="hidden">
             <h2>🎯 Целевая точка</h2>
-
-            <label for="fav-target-lat">
-                Широта цели
-                <input id="fav-target-lat" type="number" step="0.000001" value="44.70">
-            </label>
-
-            <label for="fav-target-lon">
-                Долгота цели
-                <input id="fav-target-lon" type="number" step="0.000001" value="34.50">
-            </label>
-
-            <button id="fav-set-target" type="button">
-                Установить цель на карте
-            </button>
-
+            <label for="fav-target-lat">Широта цели<input id="fav-target-lat" type="number" step="0.000001" value="44.70"></label>
+            <label for="fav-target-lon">Долгота цели<input id="fav-target-lon" type="number" step="0.000001" value="34.50"></label>
+            <button id="fav-set-target" type="button">Установить цель на карте</button>
             <h2>📍 Область запуска</h2>
-
-            <label for="fav-launch-lat">
-                Центр запуска (широта)
-                <input id="fav-launch-lat" type="number" step="0.000001" value="44.67">
-            </label>
-
-            <label for="fav-launch-lon">
-                Центр запуска (долгота)
-                <input id="fav-launch-lon" type="number" step="0.000001" value="34.41">
-            </label>
-
-            <button id="fav-set-launch" type="button">
-                Установить центр запуска на карте
-            </button>
-
-            <label for="fav-radius">
-                Радиус области, м
-                <input id="fav-radius" type="number" min="100" step="50" value="1000">
-            </label>
-
+            <label for="fav-launch-lat">Центр запуска (широта)<input id="fav-launch-lat" type="number" step="0.000001" value="44.67"></label>
+            <label for="fav-launch-lon">Центр запуска (долгота)<input id="fav-launch-lon" type="number" step="0.000001" value="34.41"></label>
+            <button id="fav-set-launch" type="button">Установить центр запуска на карте</button>
+            <label for="fav-radius">Радиус области, м<input id="fav-radius" type="number" min="100" step="50" value="1000"></label>
             <h2>⚙️ Параметры поиска</h2>
-
-            <label for="fav-search-start">
-                Начало периода поиска
-                <input id="fav-search-start" type="datetime-local">
-            </label>
-
-            <label for="fav-search-end">
-                Конец периода поиска
-                <input id="fav-search-end" type="datetime-local">
-            </label>
-
-            <label for="fav-ascent">
-                Скорость набора, м/с
-                <input id="fav-ascent" type="number" min="0" step="0.1" value="5">
-            </label>
-
-            <label for="fav-max-alt">
-                Максимальная высота, м
-                <input id="fav-max-alt" type="number" min="1000" step="100" value="9000">
-            </label>
-
-            <label for="fav-duration">
-                Длительность полёта, ч
-                <input id="fav-duration" type="number" min="1" step="0.5" value="5">
-            </label>
-
-            <label for="fav-max-dist">
-                Макс. расстояние до цели, м
-                <input id="fav-max-dist" type="number" min="100" step="100" value="5000">
-            </label>
-
-            <button id="calculate-favorable" class="primary" type="button">
-                Найти благоприятные окна
-            </button>
+            <label for="fav-search-start">Начало периода поиска<input id="fav-search-start" type="datetime-local"></label>
+            <label for="fav-search-end">Конец периода поиска<input id="fav-search-end" type="datetime-local"></label>
+            <label for="fav-ascent">Скорость набора, м/с<input id="fav-ascent" type="number" min="0" step="0.1" value="5"></label>
+            <label for="fav-max-alt">Максимальная высота, м<input id="fav-max-alt" type="number" min="1000" step="100" value="9000"></label>
+            <label for="fav-duration">Длительность полёта, ч<input id="fav-duration" type="number" min="1" step="0.5" value="5"></label>
+            <label for="fav-max-dist">Макс. расстояние до цели, м<input id="fav-max-dist" type="number" min="100" step="100" value="5000"></label>
+            <button id="calculate-favorable" class="primary" type="button">Найти благоприятные окна</button>
         </section>
 
-        <section class="status-section">
-            <div id="status"></div>
-        </section>
-
-        <section id="results" class="hidden">
-            <h2>📊 Результат</h2>
-            <div id="result-content"></div>
-        </section>
+        <section class="status-section"><div id="status"></div></section>
+        <section id="results" class="hidden"><h2>📊 Результат</h2><div id="result-content"></div></section>
     </aside>
-
-    <main>
-        <div id="map"></div>
-    </main>
+    <main><div id="map"></div></main>
 </div>
-
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="/static/script.js"></script>
+<script src="/static/app.js"></script>
 </body>
 </html>
