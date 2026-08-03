@@ -19,7 +19,7 @@ from backtrajectory import (
 from models import FlightParameters, StartPoint
 from trajectory import calculate_trajectory
 from weather import build_grid, fetch_grid, interpolate_wind
-from favorable_launch_finder import (
+from favorable_launch_finder_v2 import (
     GeoPoint,
     find_favorable_conditions,
     FavorableWindow,
@@ -27,7 +27,7 @@ from favorable_launch_finder import (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Wind Trajectory", version="3.3.1")
+app = FastAPI(title="Wind Trajectory", version="3.3.2")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
@@ -83,9 +83,6 @@ def ensure_utc(value: datetime) -> datetime:
 
 
 def trajectory_grid_radius_km(_: float) -> float:
-    # Один и тот же пространственный wind-field для 6/12/24/48/72/168 ч.
-    # Иначе изменение радиуса сетки меняет точки интерполяции и две
-    # траектории с одинаковым начальным условием начинают расходиться.
     return 1200.0
 
 
@@ -98,6 +95,8 @@ def serialize_candidate(c: LaunchCandidate) -> dict:
         "launch_time": c.launch_time.isoformat(),
         "launch_point": {"lat": c.launch_point.lat, "lon": c.launch_point.lon},
         "min_distance_to_target_m": round(c.min_distance_to_target_m, 1),
+        "time_in_target_s": round(c.time_in_target_s, 1),
+        "score": round(c.score, 4),
         "closest_point": {
             "time": c.closest_point.time.isoformat(),
             "lat": c.closest_point.lat,
