@@ -1,53 +1,77 @@
-# Wind Trajectory v2
+# Wind Trajectory
 
-Lightweight FastAPI + Leaflet application for forward trajectory estimation using Open-Meteo.
+FastAPI + Leaflet application for estimating balloon trajectories using Open-Meteo wind data.
 
-## Improvements in v2
+## What is included
 
-- Forecast is fetched as a geographic grid around the expected route, not only at the start point.
-- Wind is interpolated in four dimensions: time, latitude, longitude and altitude.
-- Altitude uses interpolation between pressure levels.
-- Forecast is cached in RAM for a short period.
-- Wind field arrows are displayed on the map for a selected altitude.
-- API errors and forecast limits are handled explicitly.
-- The route engine stops when it leaves the available forecast domain.
-- 10-minute integration step is kept for speed and simplicity.
-- Route statistics and charts remain lightweight.
+- Interactive Leaflet map.
+- Forward trajectory calculation with RK4 integration.
+- Wind lookup at a selected point and altitude.
+- Backtrajectory ensemble endpoint.
+- Favorable launch-window search endpoint.
+- Open-Meteo forecast/archive data with local interpolation.
+- In-memory weather caching.
 
-## Run
+## Run locally
 
-bash
+Create and activate a virtual environment:
+
+```bash
 python -m venv .venv
+```
 
-# Linux/macOS
+Windows PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+Linux/macOS:
+
+```bash
 source .venv/bin/activate
+```
 
-# Windows
-# .venv\Scripts\activate
+Install dependencies:
 
-pip install -r requirements.txt
+```bash
+python -m pip install -r requirements.txt
+```
+
+Start the server:
+
+```bash
 uvicorn app:app --reload
+```
 
+Open `http://127.0.0.1:8000` in a browser.
 
-Open http://127.0.0.1:8000
+## API
 
-## Test
+- `GET /api/health` — health check.
+- `GET /api/wind?lat=52.23&lon=21.01&altitude=1000` — wind at a point.
+- `POST /api/trajectory` — forward trajectory.
+- `POST /api/backtrajectory` — ensemble backtrajectory.
+- `POST /api/favorable` — search for favorable launch windows.
+- `GET /api/config` — runtime defaults.
+- `GET /docs` — interactive FastAPI documentation.
 
-Default point:
-44.67, 34.41
+## Forward trajectory example
 
-Try:
-- start altitude: 0 m
-- ascent rate: 5 m/s
-- max altitude: 10000 m
-- duration: 6 hours
+```json
+{
+  "start": {"lat": 52.2297, "lon": 21.0122},
+  "start_time": "2026-08-03T12:00:00Z",
+  "start_altitude": 0,
+  "ascent_rate": 5,
+  "max_altitude": 10000,
+  "duration_hours": 6,
+  "step_minutes": 10
+}
+```
 
-Click "Рассчитать маршрут".
+## Notes
 
-## Model
+Weather data is provided by Open-Meteo. Network access is required for calculations. The backtrajectory endpoint uses an ensemble and can take noticeably longer than the forward calculation.
 
-Horizontal movement follows the forecast wind. Vertical movement is:
-
-z(t) = min(max_altitude, start_altitude + ascent_rate * t)
-
-The forecast is downloaded once for a compact grid around the expected route. The application then interpolates wind locally.
+This project is a trajectory-estimation tool, not a safety-critical navigation system. Validate weather and model assumptions before real-world use.
