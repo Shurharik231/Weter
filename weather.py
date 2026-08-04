@@ -42,9 +42,9 @@ def _make_coordinate_pairs(latitudes, longitudes):
 async def fetch_grid(latitudes, longitudes, start: datetime, end: datetime) -> dict[str, Any]:
     start = start.astimezone(timezone.utc) if start.tzinfo else start.replace(tzinfo=timezone.utc)
     end = end.astimezone(timezone.utc) if end.tzinfo else end.replace(tzinfo=timezone.utc)
-    if end <= start:
-        raise WeatherError("Конец периода прогноза должен быть позже начала.")
-    horizon_hours = (end - start).total_seconds() / 3600.0
+    if end < start:
+        raise WeatherError("Конец периода прогноза не может быть раньше начала.")
+    horizon_hours = max(1.0, (end - start).total_seconds() / 3600.0)
     if horizon_hours > 16 * 24:
         raise WeatherError("Период расчёта превышает максимальный горизонт Weather Forecast API (16 суток).")
     key = _cache_key(latitudes, longitudes, start, end)
