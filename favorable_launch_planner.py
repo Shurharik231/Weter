@@ -13,12 +13,10 @@ from weather import interpolate_wind
 
 EARTH_RADIUS_M = 6_371_000.0
 
-
 @dataclass(frozen=True)
 class GeoPoint:
     lat: float
     lon: float
-
 
 @dataclass
 class Candidate:
@@ -34,8 +32,8 @@ class Candidate:
     restricted_hit: bool
     ensemble_success_rate: float = 0.0
     ensemble_median_distance_m: float = 0.0
+    ensemble_p90_distance_m: float = 0.0
     score: float = float("inf")
-
 
 @dataclass
 class FavorableWindow:
@@ -44,200 +42,174 @@ class FavorableWindow:
     recommended_time: datetime
     candidates: list[Candidate] = field(default_factory=list)
 
-
 def _distance_m(a: GeoPoint, b: GeoPoint) -> float:
     p1, p2 = radians(a.lat), radians(b.lat)
-    dp = radians(b.lat - a.lat)
-    dl = radians(b.lon - a.lon)
+    dp = radians(b.lat - a.lat); dl = radians(b.lon - a.lon)
     h = sin(dp / 2) ** 2 + cos(p1) * cos(p2) * sin(dl / 2) ** 2
     return 2 * EARTH_RADIUS_M * asin(sqrt(max(0.0, min(1.0, h))))
-
 
 def _offset(center: GeoPoint, east_m: float, north_m: float) -> GeoPoint:
     lat = center.lat + north_m / 111_320.0
     lon = center.lon + east_m / (111_320.0 * max(0.15, cos(radians(center.lat))))
     return GeoPoint(lat, lon)
 
-
 def generate_launch_points(center: GeoPoint, radius_m: float, rings: int = 2, points_per_ring: int = 12) -> list[GeoPoint]:
-    """Deterministic coverage of the launch area; no random launch points."""
+    """Deterministic, reproducible coverage of the launch disk."""
     result = [center]
-    for ring in range(1, max(1, rings) + 1):
-        radius = radius_m * ring / max(1, rings)
+    rings = max(1, int(rings)); points_per_ring = max(8, int(points_per_ring))
+    for ring in range(1, rings + 1):
+        radius = radius_m * ring / rings
         count = max(8, points_per_ring * ring)
         for i in range(count):
             angle = 2 * 3.141592653589793 * i / count
             result.append(_offset(center, radius * sin(angle), radius * cos(angle)))
     return result
 
-
 def _point_in_polygon(point: GeoPoint, polygon: list[GeoPoint]) -> bool:
-    inside = False
-    j = len(polygon) - 1
+    if len(polygon) < 3: return False
+    inside = False; j = len(polygon) - 1
     for i, p in enumerate(polygon):
-        pi = ((p.lon > point.lon) != (polygon[j].lon > point.lon))
-        if pi:
-            cross = (polygon[j].lat - p.lat) * (point.lon - p.lon) / (polygon[j].lon - p.lon) + p.lat
-            if point.lat < cross:
-                inside = not inside
+        q = polygon[j]
+        if (p.lon > point.lon) != (q.lon > point.lon):
+            x = (q.lat - p.lat) * (point.lon - p.lon) / (q.lon - p.lon) + p.lat
+            if point.lat < x: inside = not inside
         j = i
     return inside
 
-
 def _trajectory_hits_polygon(points: list[TrajectoryPoint], polygon: list[GeoPoint]) -> bool:
-    if len(polygon) < 3:
-        return False
-    return any(_point_in_polygon(GeoPoint(p.lat, p.lon), polygon) for p in points)
+    return len(polygon) >= 3 and any(_point_in_polygon(GeoPoint(p.lat, p.lon), polygon) for p in points)
 
+def _target_membership(point: GeoPoint, target: GeoPoint | None, radius_m: float, polygon: list[GeoPoint] | None) -> bool:
+    if polygon and len(polygon) >= 3:
+        return _point_in_polygon(point, polygon)
+    return target is not None and _distance_m(point, target) <= radius_m
 
-def _trajectory_quality(points: list[TrajectoryPoint], target: GeoPoint, radius_m: float) -> tuple[float, TrajectoryPoint, float]:
-    best_d = float("inf")
-    best = points[0]
-    inside = 0.0
+def _trajectory_quality(points: list[TrajectoryPoint], target: GeoPoint | None, radius_m: float, target_polygon: list[GeoPoint] | None = None) -> tuple[float, TrajectoryPoint, float, bool]:
+    if not points: raise ValueError("Траектория не содержит точек")
+    best_d = float("inf"); best = points[0]; inside = 0.0; hit = False
     for a, b in zip(points, points[1:]):
-        da = _distance_m(GeoPoint(a.lat, a.lon), target)
-        db = _distance_m(GeoPoint(b.lat, b.lon), target)
-        if da < best_d:
-            best_d, best = da, a
-        if db < best_d:
-            best_d, best = db, b
+        if target is not None:
+            da = _distance_m(GeoPoint(a.lat, a.lon), target); db = _distance_m(GeoPoint(b.lat, b.lon), target)
+            if da < best_d: best_d, best = da, a
+            if db < best_d: best_d, best = db, b
+        else:
+            da = db = float("inf")
+        ia = _target_membership(GeoPoint(a.lat, a.lon), target, radius_m, target_polygon)
+        ib = _target_membership(GeoPoint(b.lat, b.lon), target, radius_m, target_polygon)
         dt = max(0.0, (b.time - a.time).total_seconds())
-        if da <= radius_m and db <= radius_m:
-            inside += dt
-        elif (da <= radius_m) != (db <= radius_m):
-            inside += dt * 0.5
-    return best_d, best, inside
-
+        if ia and ib: inside += dt; hit = True
+        elif ia != ib: inside += dt * 0.5; hit = True
+    if target is not None and len(points) == 1:
+        best_d = _distance_m(GeoPoint(points[0].lat, points[0].lon), target)
+    if target_polygon and len(target_polygon) >= 3:
+        hit = hit or any(_point_in_polygon(GeoPoint(p.lat, p.lon), target_polygon) for p in points)
+        if not hit: best_d = float("inf")
+    return best_d, best, inside, hit
 
 def _wind_vector(forecast: dict[str, Any], lat: float, lon: float, altitude: float, when: datetime) -> tuple[float, float]:
     speed, direction = interpolate_wind(forecast, lat, lon, altitude, when)
     towards = radians((direction + 180) % 360)
     return speed * sin(towards), speed * cos(towards)
 
-
 def _surface_and_shear(forecast: dict[str, Any], point: GeoPoint, when: datetime, top_m: float) -> tuple[float, float]:
     surface = interpolate_wind(forecast, point.lat, point.lon, 10.0, when)[0]
     top_u, top_v = _wind_vector(forecast, point.lat, point.lon, max(100.0, top_m), when)
     low_u, low_v = _wind_vector(forecast, point.lat, point.lon, 10.0, when)
-    shear = sqrt((top_u - low_u) ** 2 + (top_v - low_v) ** 2) / max(1.0, top_m - 10.0)
-    return surface, shear
-
+    return surface, sqrt((top_u-low_u)**2 + (top_v-low_v)**2) / max(1.0, top_m-10.0)
 
 def _weather_hazard(forecast: dict[str, Any], points: list[TrajectoryPoint], precipitation_limit_mm: float) -> bool:
-    """Use hourly weather_code/precipitation where available. Missing fields do not create a false hazard."""
     cells = forecast.get("cells", [])
-    if not cells:
-        return False
+    if not cells: return False
     for p in points:
-        cell = min(cells, key=lambda c: (float(c.get("latitude", 0)) - p.lat) ** 2 + (float(c.get("longitude", 0)) - p.lon) ** 2)
-        hourly = cell.get("hourly", {})
-        times = hourly.get("time", [])
-        if not times:
-            continue
-        # Nearest hourly sample; trajectory is already integrated at short intervals.
+        cell = min(cells, key=lambda c: (float(c.get("latitude", 0))-p.lat)**2 + (float(c.get("longitude", 0))-p.lon)**2)
+        hourly = cell.get("hourly", {}); times = hourly.get("time", [])
+        if not times: continue
         idx = min(range(len(times)), key=lambda i: abs(datetime.fromisoformat(times[i].replace("Z", "+00:00")) - p.time))
-        code = hourly.get("weather_code", [None] * len(times))[idx]
-        precip = hourly.get("precipitation", [0.0] * len(times))[idx] or 0.0
-        if code is not None and int(code) in {95, 96, 99}:
-            return True
-        if float(precip) > precipitation_limit_mm:
-            return True
+        codes = hourly.get("weather_code", []); precip = hourly.get("precipitation", [])
+        code = codes[idx] if idx < len(codes) else None; rain = precip[idx] if idx < len(precip) and precip[idx] is not None else 0.0
+        if code is not None and int(code) in {95, 96, 99}: return True
+        if float(rain) > precipitation_limit_mm: return True
     return False
 
-
 def _perturb_forecast(forecast: dict[str, Any], seed: int, wind_sigma_mps: float) -> dict[str, Any]:
-    """Perturb wind vectors in u/v space so an ensemble samples forecast uncertainty."""
-    rng = random.Random(seed)
-    result = deepcopy(forecast)
+    """Create a reproducible correlated forecast perturbation.
+
+    A common spatial component keeps neighbouring cells coherent, while an
+    AR(1)-like temporal component prevents unrealistic hour-to-hour noise.
+    Uncertainty grows with forecast lead time instead of staying constant.
+    """
+    rng = random.Random(seed); result = deepcopy(forecast)
     for cell in result.get("cells", []):
-        hourly = cell.get("hourly", {})
+        hourly = cell.get("hourly", {}); time_count = len(hourly.get("time", []))
+        if not time_count: continue
+        common_e = common_n = 0.0
+        series_e = series_n = 0.0
         for level in [k[len("wind_speed_"):] for k in hourly if k.startswith("wind_speed_")]:
             sk, dk = f"wind_speed_{level}", f"wind_direction_{level}"
             speeds, directions = hourly.get(sk), hourly.get(dk)
-            if not speeds or not directions:
-                continue
+            if not speeds or not directions: continue
             for i, (s, d) in enumerate(zip(speeds, directions)):
-                if s is None or d is None:
-                    continue
-                towards = radians((float(d) + 180) % 360)
-                u = float(s) * sin(towards) + rng.gauss(0, wind_sigma_mps)
-                v = float(s) * cos(towards) + rng.gauss(0, wind_sigma_mps)
-                speed = sqrt(u * u + v * v)
-                direction_from = (degrees(atan2(u, v)) + 180) % 360 if speed > 1e-9 else 0.0
+                if s is None or d is None: continue
+                lead_hours = i
+                sigma = wind_sigma_mps * (1.0 + 0.35 * sqrt(max(0.0, lead_hours) / 24.0))
+                common_e = 0.82 * common_e + rng.gauss(0, sigma * 0.30)
+                common_n = 0.82 * common_n + rng.gauss(0, sigma * 0.30)
+                series_e = 0.88 * series_e + rng.gauss(0, sigma * 0.55)
+                series_n = 0.88 * series_n + rng.gauss(0, sigma * 0.55)
+                towards = radians((float(d)+180) % 360)
+                u = float(s) * sin(towards) + common_e + series_e
+                v = float(s) * cos(towards) + common_n + series_n
+                speed = sqrt(u*u + v*v)
+                directions[i] = (degrees(atan2(u, v)) + 180) % 360 if speed > 1e-9 else 0.0
                 speeds[i] = speed
-                directions[i] = direction_from
     return result
 
-
-def _ensemble_metrics(base_params: FlightParameters, base_forecast: dict[str, Any], target: GeoPoint, radius_m: float, members: int, wind_sigma_mps: float, restricted: list[list[GeoPoint]], hazards: list[list[GeoPoint]]) -> tuple[float, float]:
-    distances = []
-    successes = 0
+def _ensemble_metrics(params: FlightParameters, base_forecast: dict[str, Any], target: GeoPoint | None, target_polygon: list[GeoPoint] | None, radius_m: float, members: int, wind_sigma_mps: float, restricted: list[list[GeoPoint]], hazards: list[list[GeoPoint]]) -> tuple[float, float, float]:
+    distances: list[float] = []; successes = 0
     for member in range(max(1, members)):
         forecast = base_forecast if member == 0 else _perturb_forecast(base_forecast, member * 1009, wind_sigma_mps)
-        try:
-            trajectory = calculate_trajectory(base_params, forecast)
-        except Exception:
-            continue
-        d, _, _ = _trajectory_quality(trajectory.points, target, radius_m)
-        distances.append(d)
+        try: trajectory = calculate_trajectory(params, forecast)
+        except Exception: continue
+        d, _, _, hit = _trajectory_quality(trajectory.points, target, radius_m, target_polygon); distances.append(d)
         restricted_hit = any(_trajectory_hits_polygon(trajectory.points, poly) for poly in restricted)
         hazard_hit = any(_trajectory_hits_polygon(trajectory.points, poly) for poly in hazards)
-        if d <= radius_m and not restricted_hit and not hazard_hit:
-            successes += 1
-    if not distances:
-        return 0.0, float("inf")
-    distances.sort()
-    median = distances[len(distances) // 2]
-    return successes / len(distances), median
+        if hit and not restricted_hit and not hazard_hit: successes += 1
+    if not distances: return 0.0, float("inf"), float("inf")
+    distances.sort(); n = len(distances)
+    median = distances[n//2]; p90 = distances[min(n-1, int(0.90*(n-1)))]
+    return successes / n, median, p90
 
-
-def find_favorable_windows(*, target: GeoPoint, launch_center: GeoPoint, forecast: dict[str, Any], search_start: datetime, search_end: datetime, launch_radius_m: float, target_radius_m: float, time_step_hours: float, duration_hours: float, step_minutes: float, ascent_rate: float, max_altitude: float, start_altitude: float, launch_points_rings: int, launch_points_per_ring: int, surface_wind_limit_mps: float, shear_limit_s_inv: float, ensemble_members: int, ensemble_wind_sigma_mps: float, precipitation_limit_mm: float, restricted_zones: list[list[GeoPoint]] | None = None, hazard_zones: list[list[GeoPoint]] | None = None) -> list[FavorableWindow]:
-    restricted_zones = restricted_zones or []
-    hazard_zones = hazard_zones or []
+def find_favorable_windows(*, target: GeoPoint | None, target_polygon: list[GeoPoint] | None = None, launch_center: GeoPoint, forecast: dict[str, Any], search_start: datetime, search_end: datetime, launch_radius_m: float, target_radius_m: float, time_step_hours: float, duration_hours: float, step_minutes: float, ascent_rate: float, max_altitude: float, start_altitude: float, launch_points_rings: int, launch_points_per_ring: int, surface_wind_limit_mps: float, shear_limit_s_inv: float, ensemble_members: int, ensemble_wind_sigma_mps: float, precipitation_limit_mm: float, restricted_zones: list[list[GeoPoint]] | None = None, hazard_zones: list[list[GeoPoint]] | None = None) -> list[FavorableWindow]:
+    restricted_zones = restricted_zones or []; hazard_zones = hazard_zones or []
+    if target is None and not target_polygon: raise ValueError("Нужно задать target или target_polygon")
     points = generate_launch_points(launch_center, launch_radius_m, launch_points_rings, launch_points_per_ring)
-    candidates: list[Candidate] = []
-    t = search_start
-    step = timedelta(hours=time_step_hours)
-
+    candidates: list[Candidate] = []; t = search_start; step = timedelta(hours=time_step_hours)
     while t <= search_end:
         for launch in points:
             params = FlightParameters(StartPoint(launch.lat, launch.lon), t, start_altitude, ascent_rate, max_altitude, duration_hours, int(max(1, round(step_minutes))))
-            try:
-                trajectory = calculate_trajectory(params, forecast)
-            except Exception:
-                continue
-            d, closest, inside = _trajectory_quality(trajectory.points, target, target_radius_m)
+            try: trajectory = calculate_trajectory(params, forecast)
+            except Exception: continue
+            d, closest, inside, hit = _trajectory_quality(trajectory.points, target, target_radius_m, target_polygon)
             surface, shear = _surface_and_shear(forecast, launch, t, max_altitude)
             restricted_hit = any(_trajectory_hits_polygon(trajectory.points, z) for z in restricted_zones)
             hazard_hit = _weather_hazard(forecast, trajectory.points, precipitation_limit_mm) or any(_trajectory_hits_polygon(trajectory.points, z) for z in hazard_zones)
-            if d > target_radius_m or surface > surface_wind_limit_mps or shear > shear_limit_s_inv or restricted_hit or hazard_hit:
-                continue
-            success_rate, median_d = _ensemble_metrics(params, forecast, target, target_radius_m, ensemble_members, ensemble_wind_sigma_mps, restricted_zones, hazard_zones)
-            if success_rate <= 0:
-                continue
-            score = (median_d / max(100.0, target_radius_m)) + 1.5 * (1 - success_rate) - min(inside / 3600.0, 2.0) * 0.25
-            candidates.append(Candidate(t, launch, trajectory, d, closest, inside, surface, shear, hazard_hit, restricted_hit, success_rate, median_d, score))
+            if not hit or surface > surface_wind_limit_mps or shear > shear_limit_s_inv or restricted_hit or hazard_hit: continue
+            success_rate, median_d, p90_d = _ensemble_metrics(params, forecast, target, target_polygon, target_radius_m, ensemble_members, ensemble_wind_sigma_mps, restricted_zones, hazard_zones)
+            if success_rate <= 0: continue
+            radius = max(100.0, target_radius_m)
+            score = 2.0*(1-success_rate) + median_d/radius + 0.75*p90_d/radius - min(inside/3600.0, 2.0)*0.25
+            candidates.append(Candidate(t, launch, trajectory, d, closest, inside, surface, shear, hazard_hit, restricted_hit, success_rate, median_d, p90_d, score))
         t += step
-
-    # One best launch point per launch time.
     best_by_time: dict[datetime, Candidate] = {}
     for c in candidates:
-        if c.launch_time not in best_by_time or c.score < best_by_time[c.launch_time].score:
-            best_by_time[c.launch_time] = c
+        if c.launch_time not in best_by_time or c.score < best_by_time[c.launch_time].score: best_by_time[c.launch_time] = c
     successful = sorted(best_by_time.values(), key=lambda c: c.launch_time)
-    if not successful:
-        return []
-
-    groups: list[list[Candidate]] = []
-    max_gap = step * 1.5
+    if not successful: return []
+    groups: list[list[Candidate]] = []; max_gap = step * 1.5
     for c in successful:
-        if not groups or c.launch_time - groups[-1][-1].launch_time > max_gap:
-            groups.append([c])
-        else:
-            groups[-1].append(c)
-
-    windows = []
-    half = timedelta(hours=max(0.0, time_step_hours) / 2)
+        if not groups or c.launch_time - groups[-1][-1].launch_time > max_gap: groups.append([c])
+        else: groups[-1].append(c)
+    half = step / 2; windows = []
     for group in groups:
         group.sort(key=lambda c: c.score)
         windows.append(FavorableWindow(group[0].launch_time - half, group[-1].launch_time + half, group[0].launch_time, group[:5]))
