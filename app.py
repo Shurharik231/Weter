@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Lock
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -17,9 +21,16 @@ from weather import build_grid, fetch_grid, interpolate_wind
 from favorable_launch_planner import GeoPoint, find_favorable_windows
 
 BASE_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Wind Trajectory", version="3.6.0")
+app = FastAPI(title="Wind Trajectory", version="3.7.0")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+
+# In-process jobs are intentional here: the calculation is local and the UI only
+# needs progress/result sharing with the same FastAPI worker. For multi-worker or
+# production deployment this should move to a real task queue/store.
+_favorable_jobs: dict[str, dict] = {}
+_favorable_jobs_lock = Lock()
+_FAVORABLE_JOB_TTL_S = 30 * 60
 
 class StartModel(BaseModel):
     lat: float = Field(..., ge=-90, le=90)
@@ -81,8 +92,6 @@ def safe_detail(exc: Exception) -> str:
     return str(exc)[:500] or exc.__class__.__name__
 
 def trajectory_grid_radius_km(duration_hours: float) -> float:
-    # Larger horizons require a materially larger meteorological domain.
-    # The integrator now fails rather than silently clamping wind at the edge.
     return min(8000.0, max(600.0, 600.0 + duration_hours * 44.0))
 
 def serialize_window(window) -> dict:
@@ -103,6 +112,62 @@ def serialize_window(window) -> dict:
             "trajectory": c.trajectory.to_dict(),
         })
     return {"window_start": window.window_start.isoformat(), "window_end": window.window_end.isoformat(), "recommended_time": window.recommended_time.isoformat(), "best_candidates": candidates}
+
+def _cleanup_jobs() -> None:
+    cutoff = time.monotonic() - _FAVORABLE_JOB_TTL_S
+    with _favorable_jobs_lock:
+        stale = [jid for jid, job in _favorable_jobs.items() if job.get("updated_monotonic", 0) < cutoff]
+        for jid in stale:
+            _favorable_jobs.pop(jid, None)
+
+def _set_job(job_id: str, **updates) -> None:
+    with _favorable_jobs_lock:
+        job = _favorable_jobs.get(job_id)
+        if job is not None:
+            job.update(updates)
+            job["updated_monotonic"] = time.monotonic()
+
+def _job_progress(job_id: str, data: dict) -> None:
+    _set_job(job_id, progress={k: v for k, v in data.items() if k != "force"})
+
+async def _run_favorable_job(job_id: str, request: FavorableRequest) -> None:
+    started = time.monotonic()
+    try:
+        start, end = ensure_utc(request.search_start), ensure_utc(request.search_end)
+        if end <= start:
+            raise ValueError("search_end must be after search_start")
+        _set_job(job_id, state="weather", progress={"stage":"weather","percent":3,"processed":0,"total":1,"message":"Загрузка прогноза ветра…","elapsed_s":0,"eta_s":None})
+        radius = trajectory_grid_radius_km(request.duration_hours) + request.launch_radius_m / 1000.0
+        target_center = request.target or request.target_polygon[0]
+        center_lat = (request.launch_center.lat + target_center.lat) / 2
+        center_lon = (request.launch_center.lon + target_center.lon) / 2
+        latitudes, longitudes = build_grid(center_lat, center_lon, radius)
+        forecast = await fetch_grid(latitudes, longitudes, start, end + timedelta(hours=request.duration_hours))
+        target = GeoPoint(request.target.lat, request.target.lon) if request.target else None
+        target_polygon = [GeoPoint(p.lat, p.lon) for p in request.target_polygon] or None
+        restricted = [[GeoPoint(p.lat,p.lon) for p in poly] for poly in request.restricted_zones]
+        hazards = [[GeoPoint(p.lat,p.lon) for p in poly] for poly in request.hazard_zones]
+        _set_job(job_id, state="calculating", progress={"stage":"screen","percent":5,"processed":0,"total":0,"message":"Прогноз загружен. Начинаем поиск…","elapsed_s":time.monotonic()-started,"eta_s":None})
+        windows = await asyncio.to_thread(
+            find_favorable_windows,
+            target=target, target_polygon=target_polygon,
+            launch_center=GeoPoint(request.launch_center.lat, request.launch_center.lon),
+            forecast=forecast, search_start=start, search_end=end,
+            launch_radius_m=request.launch_radius_m, target_radius_m=request.target_radius_m,
+            time_step_hours=request.time_step_hours, duration_hours=request.duration_hours,
+            step_minutes=request.step_minutes, ascent_rate=request.ascent_rate,
+            max_altitude=request.max_altitude, start_altitude=request.start_altitude,
+            launch_points_rings=request.launch_points_rings, launch_points_per_ring=request.launch_points_per_ring,
+            surface_wind_limit_mps=request.surface_wind_limit_mps, shear_limit_s_inv=request.shear_limit_s_inv,
+            ensemble_members=request.ensemble_members, ensemble_wind_sigma_mps=request.ensemble_wind_sigma_mps,
+            precipitation_limit_mm=request.precipitation_limit_mm,
+            restricted_zones=restricted, hazard_zones=hazards,
+            progress_callback=lambda data: _job_progress(job_id, data),
+        )
+        result = {"status":"ok","count":len(windows),"windows":[serialize_window(w) for w in windows]}
+        _set_job(job_id, state="done", progress={"stage":"done","percent":100,"processed":1,"total":1,"message":"Расчёт завершён","elapsed_s":time.monotonic()-started,"eta_s":0}, result=result, error=None)
+    except Exception as exc:
+        _set_job(job_id, state="error", progress={"stage":"error","percent":100,"message":"Расчёт завершился с ошибкой","elapsed_s":time.monotonic()-started,"eta_s":0}, error=safe_detail(exc))
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
@@ -159,24 +224,38 @@ async def create_backtrajectory(request: BackTrajectoryRequest):
 
 @app.post("/api/favorable")
 async def create_favorable(request: FavorableRequest):
-    try:
-        start, end = ensure_utc(request.search_start), ensure_utc(request.search_end)
-        if end <= start: raise HTTPException(status_code=400, detail="search_end must be after search_start")
-        radius = trajectory_grid_radius_km(request.duration_hours) + request.launch_radius_m / 1000.0
-        target_center = request.target or request.target_polygon[0]
-        center_lat = (request.launch_center.lat + target_center.lat) / 2; center_lon = (request.launch_center.lon + target_center.lon) / 2
-        latitudes, longitudes = build_grid(center_lat, center_lon, radius)
-        forecast = await fetch_grid(latitudes, longitudes, start, end + timedelta(hours=request.duration_hours))
-        target = GeoPoint(request.target.lat, request.target.lon) if request.target else None
-        target_polygon = [GeoPoint(p.lat, p.lon) for p in request.target_polygon] or None
-        restricted = [[GeoPoint(p.lat,p.lon) for p in poly] for poly in request.restricted_zones]
-        hazards = [[GeoPoint(p.lat,p.lon) for p in poly] for poly in request.hazard_zones]
-        windows = find_favorable_windows(target=target, target_polygon=target_polygon, launch_center=GeoPoint(request.launch_center.lat, request.launch_center.lon), forecast=forecast, search_start=start, search_end=end, launch_radius_m=request.launch_radius_m, target_radius_m=request.target_radius_m, time_step_hours=request.time_step_hours, duration_hours=request.duration_hours, step_minutes=request.step_minutes, ascent_rate=request.ascent_rate, max_altitude=request.max_altitude, start_altitude=request.start_altitude, launch_points_rings=request.launch_points_rings, launch_points_per_ring=request.launch_points_per_ring, surface_wind_limit_mps=request.surface_wind_limit_mps, shear_limit_s_inv=request.shear_limit_s_inv, ensemble_members=request.ensemble_members, ensemble_wind_sigma_mps=request.ensemble_wind_sigma_mps, precipitation_limit_mm=request.precipitation_limit_mm, restricted_zones=restricted, hazard_zones=hazards)
-        return {"status":"ok","count":len(windows),"windows":[serialize_window(w) for w in windows]}
-    except HTTPException: raise
-    except ValueError as exc: raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except Exception as exc: raise HTTPException(status_code=502, detail=f"Favorable search/weather error: {safe_detail(exc)}") from exc
+    """Compatibility endpoint: waits for the full result as before."""
+    job_id = await _start_favorable_job(request)
+    while True:
+        with _favorable_jobs_lock:
+            job = dict(_favorable_jobs.get(job_id, {}))
+        if job.get("state") in {"done", "error"}:
+            if job.get("state") == "error": raise HTTPException(status_code=502, detail=job.get("error", "Calculation failed"))
+            return job["result"]
+        await asyncio.sleep(0.25)
+
+async def _start_favorable_job(request: FavorableRequest) -> str:
+    _cleanup_jobs()
+    job_id = uuid.uuid4().hex
+    with _favorable_jobs_lock:
+        _favorable_jobs[job_id] = {"state":"queued","progress":{"stage":"queued","percent":0,"processed":0,"total":0,"message":"Задача поставлена в очередь","elapsed_s":0,"eta_s":None},"result":None,"error":None,"updated_monotonic":time.monotonic()}
+    asyncio.create_task(_run_favorable_job(job_id, request))
+    return job_id
+
+@app.post("/api/favorable/start", status_code=202)
+async def start_favorable(request: FavorableRequest):
+    job_id = await _start_favorable_job(request)
+    return {"status":"accepted","job_id":job_id}
+
+@app.get("/api/favorable/status/{job_id}")
+async def favorable_status(job_id: str):
+    _cleanup_jobs()
+    with _favorable_jobs_lock:
+        job = _favorable_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Задача расчёта не найдена или уже удалена")
+        return {"status":job["state"],"progress":job["progress"],"result":job["result"],"error":job["error"]}
 
 @app.get("/api/config")
 async def config():
-    return {"max_trajectory_hours":168,"default_step_minutes":5,"backtrajectory":{"bilinear_spatial_wind":True,"correlated_wind_bias":True,"observation_uncertainty":True},"favorable":{"ensemble":True,"correlated_uncertainty":True,"surface_wind_filter":True,"wind_shear_filter":True,"weather_hazard_filter":True,"restricted_zones":True,"target_polygon":True,"ensemble_p90":True}}
+    return {"max_trajectory_hours":168,"default_step_minutes":5,"backtrajectory":{"bilinear_spatial_wind":True,"correlated_wind_bias":True,"observation_uncertainty":True},"favorable":{"ensemble":True,"correlated_uncertainty":True,"surface_wind_filter":True,"wind_shear_filter":True,"weather_hazard_filter":True,"restricted_zones":True,"target_polygon":True,"ensemble_p90":True,"background_jobs":True,"progress_eta":True}}
