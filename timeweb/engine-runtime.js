@@ -10,8 +10,8 @@ const runtime={
  async favorable(){rtClear();rtStatus('Окно запуска: расчёт в браузере…');rtProgress(3);if(typeof window.favorableExact==='function')return window.favorableExact();throw Error('Вычислительное ядро планировщика не загружено');}
 };
 window.weterBrowserRuntime=runtime;
-/* These assignments intentionally happen after index.php inline handlers. */
-if(typeof window.runTrajectoryExact==='function'||typeof window.trajectoryExact==='function')window.direct=()=>runtime.direct();
-if(typeof window.runBackExact==='function'||typeof window.backTrajectoryExact==='function')window.back=()=>runtime.back();
-if(typeof window.favorableExact==='function')window.fav=()=>runtime.favorable();
+/* Loaded by core1 shutdown after the page inline script, so replace its handlers. */
+window.direct=()=>runtime.direct();
+window.back=()=>runtime.back();
+window.fav=()=>runtime.favorable();
 })();
