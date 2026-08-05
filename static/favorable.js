@@ -117,7 +117,7 @@ function addFavTrajectoryLine(group,points,isBest,windowIndex,candidate){
 }
 function renderFavorableMap(data){
     if(!favMapReady())return;clearFavorableMap();var group=L.layerGroup().addTo(map);favTrajectoryLayer=group;var bounds=[];
-    var windows=data.windows||[];windows.forEach(function(windowItem,wi){var candidate=(windowItem.best_candidates||[])[0];if(!candidate)return;var points=candidate.trajectory&&candidate.trajectory.points||[];if(points.length<2)return;var visible=favTrajectoryParts(points).before;visible.forEach(function(p){bounds.push([p.lat,p.lon]);});addFavTrajectoryLine(group,points,true,wi,candidate);});
+    var windows=data.windows||[];windows.forEach(function(windowItem,wi){var candidate=(windowItem.best_candidates||[])[0];if(!candidate)return;var points=candidate.trajectory&&(candidate.trajectory.trajectory||candidate.trajectory.points)||[];if(points.length<2)return;var visible=favTrajectoryParts(points).before;visible.forEach(function(p){bounds.push([p.lat,p.lon]);});addFavTrajectoryLine(group,points,true,wi,candidate);});
     if(bounds.length)map.fitBounds(bounds,{padding:[40,40],maxZoom:11});
 }
 function formatMeters(value){var n=Number(value);if(!Number.isFinite(n))return"—";return n>=1000?(n/1000).toFixed(2)+" км":Math.round(n)+" м";}
