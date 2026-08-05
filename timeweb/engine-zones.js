@@ -1,29 +1,50 @@
-/* Extended favorable-window solver for target polygons and restricted/hazard zones. */
-(()=>{
-'use strict';
-const baseFav=window.fav;
-const E=6371000,R=Math.PI/180,D=180/Math.PI;
-const LV=[1000,975,950,925,900,850,800,700,600,500,400,300,250,200];
-const $=id=>document.getElementById(id),cl=(x,a,b)=>Math.max(a,Math.min(b,x));
-const mv=(lat,lon,e,n)=>{const d=Math.hypot(e,n);if(d<1e-9)return[lat,lon];const b=Math.atan2(e,n),ad=d/E,p=lat*R,l=lon*R,p2=Math.asin(Math.sin(p)*Math.cos(ad)+Math.cos(p)*Math.sin(ad)*Math.cos(b));return[p2*D,((l+Math.atan2(Math.sin(b)*Math.sin(ad)*Math.cos(p),Math.cos(ad)-Math.sin(p)*Math.sin(p2)))*D+540)%360-180]};
-const ds=(a,b)=>{const p1=a.lat*R,p2=b.lat*R,dp=(b.lat-a.lat)*R,dl=(b.lon-a.lon)*R,h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*E*Math.asin(Math.sqrt(cl(h,0,1)))};
-const uv=(s,d)=>{const a=(d+180)*R;return[s*Math.sin(a),s*Math.cos(a)]};
-const seedrng=s=>{let x=s>>>0;return()=>{x^=x<<13;x^=x>>>17;x^=x<<5;return(x>>>0)/4294967296}};
-const gauss=r=>{const u=Math.max(1e-12,r()),v=Math.max(1e-12,r());return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v)};
-function parseZones(id){const s=$(id)?.value.trim();if(!s)return[];const x=JSON.parse(s);if(!Array.isArray(x))throw Error(id+' должен быть массивом');return x.length&&Array.isArray(x[0])?x:[x]}
-function polyPoint(p,z){let inside=false;for(let i=0,j=z.length-1;i<z.length;j=i++){const a=z[i],b=z[j];if((a.lon>p.lon)!=(b.lon>p.lon)&&p.lat<(b.lat-a.lat)*(p.lon-a.lon)/(b.lon-a.lon)+a.lat)inside=!inside}return inside}
-function orient(a,b,c){return(b.lon-a.lon)*(c.lat-a.lat)-(b.lat-a.lat)*(c.lon-a.lon)}
-function intersect(a,b,c,d){const o1=orient(a,b,c),o2=orient(a,b,d),o3=orient(c,d,a),o4=orient(c,d,b);return((o1>0)!=(o2>0))&&((o3>0)!=(o4>0))}
-function polyHit(pts,z){if(!z||z.length<3)return false;for(const p of pts)if(polyPoint(p,z))return true;for(let i=1;i<pts.length;i++)for(let j=0;j<z.length;j++)if(intersect(pts[i-1],pts[i],z[j],z[(j+1)%z.length]))return true;return false}
-function targetQuality(pts,target,rad,poly){let min=Infinity,best=pts[0],inside=0;for(const p of pts){const d=poly?(polyPoint(p,poly)?0:Infinity):ds(p,target);if(d<min){min=d;best=p}}for(let i=1;i<pts.length;i++){const a=pts[i-1],b=pts[i],dt=Math.max(0,(new Date(b.time)-new Date(a.time))/1000),ia=poly?polyPoint(a,poly):ds(a,target)<=rad,ib=poly?polyPoint(b,poly):ds(b,target)<=rad;if(ia&&ib)inside+=dt;else if(poly&&polyHit([a,b],poly))inside+=dt*.5;else if(!poly&&(ia||ib))inside+=dt*.5}return{min,best,inside,hit:poly?polyHit(pts,poly):min<=rad}}
-function grid(lat,lon,rkm){const xs=[-1,-.5,0,.5,1],ld=rkm/111,od=rkm/Math.max(20,111*Math.cos(lat*R));return{lat:xs.map(x=>lat+x*ld),lon:xs.map(x=>lon+x*od)}}
-function vars(){return LV.flatMap(p=>['wind_speed_'+p+'hPa','wind_direction_'+p+'hPa','temperature_'+p+'hPa','geopotential_height_'+p+'hPa']).concat(['precipitation','weather_code']).join(',')}
-async function weather(lat,lon,rkm,start,end){const g=grid(lat,lon,rkm),age=(Date.now()-start.getTime())/864e5;let base,pa;if(age>5.5){base='https://archive-api.open-meteo.com/v1/archive';pa={start_date:start.toISOString().slice(0,10),end_date:end.toISOString().slice(0,10)}}else{base='https://api.open-meteo.com/v1/forecast';pa={past_days:Math.min(92,Math.max(1,Math.floor(Math.max(0,age))+3)),forecast_days:2}}Object.assign(pa,{latitude:g.lat.join(','),longitude:g.lon.join(','),hourly:vars(),timezone:'UTC',wind_speed_unit:'ms',temperature_unit:'celsius'});const q=await fetch(base+'?'+new URLSearchParams(pa));if(!q.ok)throw Error('Open-Meteo HTTP '+q.status);let c=await q.json();if(!Array.isArray(c))c=[c];return{cells:c,lats:g.lat,lons:g.lon,times:c[0].hourly.time.map(x=>new Date(x+'Z'))}}
-function br(a,x){if(x<=a[0])return[0,0,0];if(x>=a.at(-1))return[a.length-1,a.length-1,0];let i=1;while(a[i]<x)i++;return[i-1,i,(x-a[i-1])/(a[i]-a[i-1])]}function tb(a,t){let l=0,h=a.length-1;if(t<=a[0])return[0,0,0];if(t>=a[h])return[h,h,0];while(l<h){const m=(l+h)>>1;if(a[m]<t)l=m+1;else h=m}return[l-1,l,(t-a[l-1])/(a[l]-a[l-1])}
-function node(w,c,z,t){const h=c.hourly,[i,j,f]=tb(w.times,t),v=[];for(const p of LV){const s=h['wind_speed_'+p+'hPa'],d=h['wind_direction_'+p+'hPa'],g=h['geopotential_height_'+p+'hPa'];if(!s||!d||!g||s[i]==null||s[j]==null||g[i]==null||g[j]==null)continue;const [u0,n0]=uv(+s[i],+d[i]),[u1,n1]=uv(+s[j],+d[j]),zz=+g[i]+(+g[j]-+g[i])*f;v.push([zz,u0+(u1-u0)*f,n0+(n1-n0)*f])}v.sort((a,b)=>a[0]-b[0]);if(!v.length)throw Error('Нет вертикального профиля');if(z<=v[0][0])return v[0].slice(1);if(z>=v.at(-1)[0])return v.at(-1).slice(1);for(let k=1;k<v.length;k++)if(z<=v[k][0]){const q=(z-v[k-1][0])/(v[k][0]-v[k-1][0]);return[v[k-1][1]+(v[k][1]-v[k-1][1])*q,v[k-1][2]+(v[k][2]-v[k-1][2])*q]}}
-function wind(w,lat,lon,z,t,b=[0,0]){const [iy,jy,fy]=br(w.lats,lat),[ix,jx,fx]=br(w.lons,lon),at=(y,x)=>w.cells[y*5+x]||w.cells[0],a=node(w,at(iy,ix),z,t),b1=node(w,at(iy,jx),z,t),c=node(w,at(jy,ix),z,t),d=node(w,at(jy,jx),z,t),f=(x,y,z,q)=>x*(1-fx)*(1-fy)+y*fx*(1-fy)+z*(1-fx)*fy+q*fx*fy;return[f(a[0],b1[0],c[0],d[0])+b[0],f(a[1],b1[1],c[1],d[1])+b[1]]}
-function traj(w,p,bias=[0,0]){let la=p.lat,lo=p.lon,z=0,t=new Date(p.time),el=0,tot=p.duration*3600,dt0=p.step*60,out=[];const der=(a,b,c,d)=>wind(w,a,b,c,d,bias);out.push({time:t.toISOString(),lat:la,lon:lo,altitude_m:z});while(el<tot-1e-9){const dt=Math.min(dt0,tot-el),k1=der(la,lo,z,t),k2p=mv(la,lo,k1[0]*dt/2,k1[1]*dt/2),t2=new Date(t.getTime()+dt*500),k2=der(k2p[0],k2p[1],Math.min(p.maxAlt,z+p.ascent*dt/2),t2),k3p=mv(la,lo,k2[0]*dt/2,k2[1]*dt/2),k3=der(k3p[0],k3p[1],Math.min(p.maxAlt,z+p.ascent*dt/2),t2),k4p=mv(la,lo,k3[0]*dt,k3[1]*dt),t4=new Date(t.getTime()+dt*1000),k4=der(k4p[0],k4p[1],Math.min(p.maxAlt,z+p.ascent*dt),t4);[la,lo]=mv(la,lo,dt*(k1[0]+2*k2[0]+2*k3[0]+k4[0])/6,dt*(k1[1]+2*k2[1]+2*k3[1]+k4[1])/6);z=Math.min(p.maxAlt,z+p.ascent*dt);t=t4;el+=dt;out.push({time:t.toISOString(),lat:la,lon:lo,altitude_m:z})}return out}
-function launchPts(c,r){const out=[c];for(let ring=1;ring<=2;ring++){const rr=r*ring/2,n=12*ring;for(let i=0;i<n;i++){const a=2*Math.PI*i/n;out.push({lat:c.lat+rr*Math.cos(a)/111320,lon:c.lon+rr*Math.sin(a)/(111320*Math.max(.15,Math.cos(c.lat*R)))})}}return out}
-function hitZone(pts,zones){return zones.some(z=>polyHit(pts,z))}
-async function run(){try{const polyS=$('fpolygon')?.value.trim(),rz=parseZones('frestricted'),hz=parseZones('fhazards');if(!polyS&&!rz.length&&!hz.length)return baseFav();const poly=polyS?JSON.parse(polyS):null;if(poly&&!Array.isArray(poly))throw Error('target polygon должен быть массивом координат');const target={lat:+$('tlat').value,lon:+$('tlon').value},center={lat:+$('clat').value,lon:+$('clon').value},start=new Date($('fs').value),end=new Date($('fe').value),duration=Math.max(.1,+$('fh').value),stepH=Math.max(.25,+$('fts').value),ascent=+$('fas').value,maxAlt=+$('fmax').value,targetR=+$('ftr').value,ens=Math.max(5,Math.min(150,+$('fens').value)),w=await weather((target.lat+center.lat)/2,(target.lon+center.lon)/2,Math.max(600,duration*44+1),start,new Date(end.getTime()+duration*3600000)),points=launchPts(center,+$('fr').value),candidates=[];let done=0,total=Math.max(1,Math.ceil((end-start)/3600000/stepH)*points.length);status('Расчёт расширенной модели…');progress(4);for(let tt=start.getTime();tt<=end.getTime();tt+=stepH*3600000){for(const lp of points){const pts=traj(w,{lat:lp.lat,lon:lp.lon,time:new Date(tt),duration,step:2,ascent,maxAlt}),q=targetQuality(pts,target,targetR,poly);if(q.hit&&!hitZone(pts,rz)&&!hitZone(pts,hz))candidates.push({launch_time:new Date(tt).toISOString(),launch_point:lp,trajectory:pts,min_distance_to_target_m:q.min,time_in_target_s:q.inside});done++;progress(4+35*done/total);await new Promise(r=>setTimeout(r,0))}}for(let ci=0;ci<candidates.length;ci++){const c=candidates[ci],ok=[];for(let m=0;m<ens;m++){const r=seedrng(1009*m+ci),pts=traj(w,{lat:c.launch_point.lat,lon:c.launch_point.lon,time:new Date(c.launch_time),duration,step:2,ascent,maxAlt},[gauss(r)*1.5,gauss(r)*1.5]),q=targetQuality(pts,target,targetR,poly);if(q.hit&&!hitZone(pts,rz)&&!hitZone(pts,hz))ok.push(q.min)}ok.sort((a,b)=>a-b);c.ensemble_success_rate=ok.length/ens;c.ensemble_median_distance_m=ok.length?ok[Math.floor((ok.length-1)*.5)]:Infinity;c.ensemble_p90_distance_m=ok.length?ok[Math.floor((ok.length-1)*.9)]:Infinity;c.score=c.ensemble_median_distance_m/Math.max(100,targetR)-Math.min(c.time_in_target_s/3600,2)*.15;candidates[ci]=c;progress(40+55*(ci+1)/Math.max(1,candidates.length));await new Promise(r=>setTimeout(r,0))}candidates.sort((a,b)=>a.score-b.score);const top=candidates.slice(0,20);clearLines();top.forEach((x,i)=>line(x.trajectory,i?'#ff8a80':'#e53935',i?2:4));fitAll();showResult('<b>Расширенная модель.</b><br>Кандидатов: '+candidates.length+(top.length?'<br><b>Рекомендуемое:</b> '+new Date(top[0].launch_time).toLocaleString()+'<br><br>'+top.map((x,i)=>'<div class="window"><b>'+(i+1)+'. '+new Date(x.launch_time).toLocaleString()+'</b><br>Старт: '+x.launch_point.lat.toFixed(5)+', '+x.launch_point.lon.toFixed(5)+'<br>До цели: '+Math.round(x.min_distance_to_target_m)+' м<br>В цели: '+Math.round(x.time_in_target_s)+' с<br>Успех: '+Math.round(x.ensemble_success_rate*100)+'% · P50 '+Math.round(x.ensemble_median_distance_m)+' м · P90 '+Math.round(x.ensemble_p90_distance_m)+' м</div>').join(''):'');status('Готово');progress(100);setTimeout(()=>progress(0,false),500)}catch(e){progress(0,false);status(e.message,true)}}window.fav=run;
+/* Weter optional zone extension.
+ *
+ * The base engine already contains the polygon / zone primitives. This file is
+ * intentionally kept as a small, syntax-safe extension point so it cannot
+ * break the whole application before the optional zone UI is configured.
+ */
+(() => {
+  'use strict';
+
+  const parseZoneText = (id) => {
+    const el = document.getElementById(id);
+    if (!el || !el.value.trim()) return [];
+    let value;
+    try {
+      value = JSON.parse(el.value);
+    } catch (err) {
+      throw new Error(`${id}: некорректный JSON`);
+    }
+    if (!Array.isArray(value)) {
+      throw new Error(`${id}: ожидается массив координат`);
+    }
+    return value.length && Array.isArray(value[0]) ? value : [value];
+  };
+
+  // Expose parsing helpers for the main engine without replacing its solver.
+  window.WeterZones = {
+    parseTargetPolygon() {
+      const el = document.getElementById('fpolygon');
+      if (!el || !el.value.trim()) return null;
+      let value;
+      try {
+        value = JSON.parse(el.value);
+      } catch (err) {
+        throw new Error('target polygon: некорректный JSON');
+      }
+      if (!Array.isArray(value) || value.length < 3) {
+        throw new Error('target polygon: нужно минимум 3 точки');
+      }
+      return value;
+    },
+
+    restrictedZones() {
+      return parseZoneText('frestricted');
+    },
+
+    hazardZones() {
+      return parseZoneText('fhazards');
+    }
+  };
 })();
