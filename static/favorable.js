@@ -84,34 +84,40 @@ function favTargetHit(point){
     return validFavCoordinates(lat,lon)&&validFavCoordinates(tlat,tlon)&&favDistanceMeters([lat,lon],[tlat,tlon])<=radius;
 }
 function favTrajectoryParts(points){
-    if(!points||points.length<2)return {before:points||[],after:[]};
-    var entry=-1;
-    for(var i=0;i<points.length;i++){if(favTargetHit(points[i])){entry=i;break;}}
-    if(entry<0){
-        // If the exact crossing lies between two trajectory samples, split at the
-        // nearest sample before the target and leave the complete line visible.
-        var min=Infinity,nearest=0;
-        for(var j=0;j<points.length;j++){var d=favDistanceMeters([points[j].lat,points[j].lon],[Number(favEl("fav-target-lat")?.value),Number(favEl("fav-target-lon")?.value)]);if(d<min){min=d;nearest=j;}}
-        return {before:points.slice(0,nearest+1),after:points.slice(nearest)};
+    if(!points||points.length<2)return {before:points||[]};
+    var tlat=Number(favEl("fav-target-lat")?.value),tlon=Number(favEl("fav-target-lon")?.value),radius=Number(favEl("fav-max-dist")?.value)||5000;
+    if(!validFavCoordinates(tlat,tlon))return {before:points};
+    var latScale=6371000*Math.PI/180,lonScale=latScale*Math.cos(tlat*Math.PI/180);
+    for(var i=0;i<points.length-1;i++){
+        var a=points[i],b=points[i+1];
+        if(favTargetHit(a))return {before:points.slice(0,i+1)};
+        var ax=(Number(a.lon)-tlon)*Math.PI/180*lonScale,ay=(Number(a.lat)-tlat)*Math.PI/180*latScale;
+        var bx=(Number(b.lon)-tlon)*Math.PI/180*lonScale,by=(Number(b.lat)-tlat)*Math.PI/180*latScale;
+        var dx=bx-ax,dy=by-ay,aa=dx*dx+dy*dy;
+        if(aa<1e-12)continue;
+        var bb=2*(ax*dx+ay*dy),cc=ax*ax+ay*ay-radius*radius,disc=bb*bb-4*aa*cc;
+        if(disc<0)continue;
+        var root=Math.sqrt(disc),t1=(-bb-root)/(2*aa),t2=(-bb+root)/(2*aa),hitT=null;
+        if(t1>=0&&t1<=1)hitT=t1;else if(t2>=0&&t2<=1)hitT=t2;
+        if(hitT!==null){
+            return {before:points.slice(0,i+1).concat([{lat:Number(a.lat)+(Number(b.lat)-Number(a.lat))*hitT,lon:Number(a.lon)+(Number(b.lon)-Number(a.lon))*hitT}])};
+        }
     }
-    return {before:points.slice(0,entry+1),after:points.slice(entry)};
+    if(favTargetHit(points[points.length-1]))return {before:points};
+    return {before:points};
 }
 function addFavTrajectoryLine(group,points,isBest,windowIndex,candidate){
     if(!points||points.length<2)return;
-    var parts=favTrajectoryParts(points),all=points.map(function(p){return[p.lat,p.lon]});
-    var before=parts.before.map(function(p){return[p.lat,p.lon]}),after=parts.after.map(function(p){return[p.lat,p.lon]});
-    // The segment from launch to first contact with the target area is red.
-    // The part after entering the target area remains visible but muted.
+    var parts=favTrajectoryParts(points),before=parts.before.map(function(p){return[p.lat,p.lon]});
     if(before.length>=2)L.polyline(before,{color:"#dc2626",weight:isBest?6:4,opacity:isBest?.95:.72}).addTo(group);
-    if(after.length>=2){var line=L.polyline(after,{color:isBest?"#2563eb":"#7c3aed",weight:isBest?4:2,opacity:isBest?.7:.28,dashArray:isBest?null:"6 8"}).addTo(group);line.bindTooltip("После входа в целевую область",{sticky:true});}
     var first=before[before.length-1];
     if(first)L.circleMarker(first,{radius:isBest?6:4,color:"#dc2626",fillColor:"#dc2626",fillOpacity:1,weight:2}).addTo(group);
     var popup="Окно "+(windowIndex+1)+"<br>Запуск: "+new Date(candidate.launch_time).toLocaleString("ru-RU")+"<br>Минимум до цели: "+Math.round(candidate.min_distance_to_target_m)+" м<br>В цели: "+(Number(candidate.time_in_target_s||0)/60).toFixed(1)+" мин";
-    var hitLine=L.polyline(all,{color:"transparent",weight:12,opacity:0}).addTo(group);hitLine.bindPopup(popup);
+    var hitLine=L.polyline(before,{color:"transparent",weight:12,opacity:0}).addTo(group);hitLine.bindPopup(popup);
 }
 function renderFavorableMap(data){
     if(!favMapReady())return;clearFavorableMap();var group=L.layerGroup().addTo(map);favTrajectoryLayer=group;var bounds=[];
-    var windows=data.windows||[];windows.forEach(function(windowItem,wi){(windowItem.best_candidates||[]).forEach(function(candidate,ci){var points=candidate.trajectory&&candidate.trajectory.points||[];if(points.length<2)return;points.forEach(function(p){bounds.push([p.lat,p.lon]);});var isBest=wi===0&&ci===0;addFavTrajectoryLine(group,points,isBest,wi,candidate);});});
+    var windows=data.windows||[];windows.forEach(function(windowItem,wi){(windowItem.best_candidates||[]).forEach(function(candidate,ci){var points=candidate.trajectory&&candidate.trajectory.points||[];if(points.length<2)return;var visible=favTrajectoryParts(points).before;visible.forEach(function(p){bounds.push([p.lat,p.lon]);});var isBest=wi===0&&ci===0;addFavTrajectoryLine(group,points,isBest,wi,candidate);});});
     if(bounds.length)map.fitBounds(bounds,{padding:[40,40],maxZoom:11});
 }
 function formatMeters(value){var n=Number(value);if(!Number.isFinite(n))return"—";return n>=1000?(n/1000).toFixed(2)+" км":Math.round(n)+" м";}
