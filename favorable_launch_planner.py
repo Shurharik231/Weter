@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from math import asin, cos, degrees, radians, sin, sqrt, atan2
@@ -15,6 +15,7 @@ from weather import interpolate_wind
 
 EARTH_RADIUS_M = 6_371_000.0
 ProgressCallback = Callable[[dict], None]
+_WORKER_FORECAST: dict[str, Any] | None = None
 
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None: return value.replace(tzinfo=timezone.utc)
@@ -152,6 +153,18 @@ def _ensemble_member(args):
     d,_,_,hit=_trajectory_quality(trajectory.points,target,radius_m,target_polygon);restricted_hit=any(_trajectory_hits_polygon(trajectory.points,poly) for poly in restricted);hazard_hit=any(_trajectory_hits_polygon(trajectory.points,poly) for poly in hazards)
     return d,bool(hit and not restricted_hit and not hazard_hit)
 
+def _init_worker(forecast:dict[str,Any]):
+    global _WORKER_FORECAST
+    _WORKER_FORECAST=forecast
+
+def _screen_candidate_worker(args):
+    launch_time,launch,params,target,target_polygon,target_radius_m,surface_wind_limit_mps,shear_limit_s_inv,precipitation_limit_mm,restricted_zones,hazard_zones=args
+    return _screen_candidate((launch_time,launch,params,_WORKER_FORECAST,target,target_polygon,target_radius_m,surface_wind_limit_mps,shear_limit_s_inv,precipitation_limit_mm,restricted_zones,hazard_zones))
+
+def _ensemble_member_worker(args):
+    params,target,target_polygon,radius_m,member,wind_sigma_mps,restricted,hazards=args
+    return _ensemble_member((params,_WORKER_FORECAST,target,target_polygon,radius_m,member,wind_sigma_mps,restricted,hazards))
+
 def _screen_candidate(args):
     launch_time,launch,params,forecast,target,target_polygon,target_radius_m,surface_wind_limit_mps,shear_limit_s_inv,precipitation_limit_mm,restricted_zones,hazard_zones=args
     try:trajectory=calculate_trajectory(params,forecast)
@@ -167,13 +180,12 @@ def _ensemble_metrics_batch(selected:list[Candidate],forecast:dict[str,Any],targ
     tasks=[]
     for idx,c in enumerate(selected):
         params=FlightParameters(StartPoint(c.launch_point.lat,c.launch_point.lon),_utc(c.launch_time),start_altitude,ascent_rate,max_altitude,duration_hours,step_minutes)
-        for member in range(member_count):
-            tasks.append((idx,(params,forecast,target,target_polygon,target_radius_m,member,ensemble_wind_sigma_mps,restricted_zones,hazard_zones)))
-    workers=min(total,max(1,min(8,(os.cpu_count() or 4))))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures=[(idx,executor.submit(_ensemble_member,args)) for idx,args in tasks]
-        for idx,future in futures:
-            result=future.result()
+        for member in range(member_count):tasks.append((idx,(params,target,target_polygon,target_radius_m,member,ensemble_wind_sigma_mps,restricted_zones,hazard_zones)))
+    workers=min(total,max(1,os.cpu_count() or 1))
+    with ProcessPoolExecutor(max_workers=workers,initializer=_init_worker,initargs=(forecast,)) as executor:
+        future_to_idx={executor.submit(_ensemble_member_worker,args):idx for idx,args in tasks}
+        for future in as_completed(future_to_idx):
+            idx=future_to_idx[future];result=future.result()
             if result is not None:results[idx].append(result)
             done+=1
             if progress_callback:
@@ -198,11 +210,11 @@ def find_favorable_windows(*,target:GeoPoint|None,target_polygon:list[GeoPoint]|
         launch_time=_utc(t)
         for launch in points:
             params=FlightParameters(StartPoint(launch.lat,launch.lon),launch_time,start_altitude,ascent_rate,max_altitude,duration_hours,calc_step)
-            screen_tasks.append((launch_time,launch,params,forecast,target,target_polygon,target_radius_m,surface_wind_limit_mps,shear_limit_s_inv,precipitation_limit_mm,restricted_zones,hazard_zones))
-    workers=min(total_screen,max(1,min(8,(os.cpu_count() or 4))))
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures=[executor.submit(_screen_candidate,args) for args in screen_tasks]
-        for processed,future in enumerate(futures,1):
+            screen_tasks.append((launch_time,launch,params,target,target_polygon,target_radius_m,surface_wind_limit_mps,shear_limit_s_inv,precipitation_limit_mm,restricted_zones,hazard_zones))
+    workers=min(total_screen,max(1,os.cpu_count() or 1))
+    with ProcessPoolExecutor(max_workers=workers,initializer=_init_worker,initargs=(forecast,)) as executor:
+        future_to_task={executor.submit(_screen_candidate_worker,args):i for i,args in enumerate(screen_tasks)}
+        for processed,future in enumerate(as_completed(future_to_task),1):
             candidate=future.result()
             if candidate is not None:candidates.append(candidate)
             if progress_callback:
