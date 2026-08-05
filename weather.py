@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import bisect
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from math import cos, radians, sin, sqrt, atan2, degrees
 from typing import Any
 
@@ -57,12 +57,13 @@ async def fetch_grid(latitudes, longitudes, start: datetime, end: datetime) -> d
     if cached and time.monotonic() - cached[0] < CACHE_TTL_SECONDS:
         return cached[1]
     coordinates = _make_coordinate_pairs(latitudes, longitudes)
+    api_end_date = (end + timedelta(days=1)).date() if end > end.replace(hour=23, minute=0, second=0, microsecond=0) else end.date()
     params = {
         "latitude": ",".join(f"{lat:.4f}" for lat,_ in coordinates),
         "longitude": ",".join(f"{lon:.4f}" for _,lon in coordinates),
         "hourly": ",".join(_variables()),
         "start_date": start.date().isoformat(),
-        "end_date": end.date().isoformat(),
+        "end_date": api_end_date.isoformat(),
         "timezone": "UTC",
         "wind_speed_unit": "ms",
     }
