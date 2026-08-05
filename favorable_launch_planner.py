@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from math import asin, cos, degrees, radians, sin, sqrt, atan2
+import os
 import random
 import time
 from typing import Any, Callable
@@ -124,12 +124,21 @@ def _weather_hazard(forecast:dict[str,Any],points:list[TrajectoryPoint],precipit
     return False
 
 def _perturb_forecast(forecast:dict[str,Any],seed:int,wind_sigma_mps:float)->dict[str,Any]:
-    rng=random.Random(seed);result=deepcopy(forecast)
-    for cell in result.get("cells",[]):
-        hourly=cell.get("hourly",{});common_e=common_n=series_e=series_n=0.0
-        for level in [k[len("wind_speed_"):] for k in hourly if k.startswith("wind_speed_")]:
-            speeds,directions=hourly.get(f"wind_speed_{level}"),hourly.get(f"wind_direction_{level}")
-            if not speeds or not directions:continue
+    rng=random.Random(seed)
+    result=dict(forecast)
+    result["cells"]=[]
+    for source_cell in forecast.get("cells",[]):
+        cell=dict(source_cell)
+        source_hourly=source_cell.get("hourly",{})
+        hourly=dict(source_hourly)
+        cell["hourly"]=hourly
+        result["cells"].append(cell)
+        common_e=common_n=series_e=series_n=0.0
+        for level in [k[len("wind_speed_"):] for k in source_hourly if k.startswith("wind_speed_")]:
+            source_speeds=source_hourly.get(f"wind_speed_{level}");source_directions=source_hourly.get(f"wind_direction_{level}")
+            if not source_speeds or not source_directions:continue
+            speeds=list(source_speeds);directions=list(source_directions)
+            hourly[f"wind_speed_{level}"]=speeds;hourly[f"wind_direction_{level}"]=directions
             for i,(s,d) in enumerate(zip(speeds,directions)):
                 if s is None or d is None:continue
                 sigma=wind_sigma_mps*(1.0+0.35*sqrt(max(0.0,i)/24.0));common_e=0.82*common_e+rng.gauss(0,sigma*0.30);common_n=0.82*common_n+rng.gauss(0,sigma*0.30);series_e=0.88*series_e+rng.gauss(0,sigma*0.55);series_n=0.88*series_n+rng.gauss(0,sigma*0.55);towards=radians((float(d)+180)%360);u=float(s)*sin(towards)+common_e+series_e;v=float(s)*cos(towards)+common_n+series_n;speed=sqrt(u*u+v*v);directions[i]=(degrees(atan2(u,v))+180)%360 if speed>1e-9 else 0.0;speeds[i]=speed
@@ -143,36 +152,62 @@ def _ensemble_member(args):
     d,_,_,hit=_trajectory_quality(trajectory.points,target,radius_m,target_polygon);restricted_hit=any(_trajectory_hits_polygon(trajectory.points,poly) for poly in restricted);hazard_hit=any(_trajectory_hits_polygon(trajectory.points,poly) for poly in hazards)
     return d,bool(hit and not restricted_hit and not hazard_hit)
 
-def _ensemble_metrics(params:FlightParameters,base_forecast:dict[str,Any],target:GeoPoint|None,target_polygon:list[GeoPoint]|None,radius_m:float,members:int,wind_sigma_mps:float,restricted:list[list[GeoPoint]],hazards:list[list[GeoPoint]],progress:Callable[[int],None]|None=None)->tuple[float,float,float]:
-    member_count=max(1,members);args=[(params,base_forecast,target,target_polygon,radius_m,i,wind_sigma_mps,restricted,hazards) for i in range(member_count)];distances=[];successes=0
-    workers=min(member_count,max(1,min(8,(__import__('os').cpu_count() or 4))))
+def _screen_candidate(args):
+    launch_time,launch,params,forecast,target,target_polygon,target_radius_m,surface_wind_limit_mps,shear_limit_s_inv,precipitation_limit_mm,restricted_zones,hazard_zones=args
+    try:trajectory=calculate_trajectory(params,forecast)
+    except Exception:return None
+    d,closest,inside,hit=_trajectory_quality(trajectory.points,target,target_radius_m,target_polygon);surface,shear=_surface_and_shear(forecast,launch,launch_time,params.max_altitude);restricted_hit=any(_trajectory_hits_polygon(trajectory.points,z) for z in restricted_zones);hazard_hit=_weather_hazard(forecast,trajectory.points,precipitation_limit_mm) or any(_trajectory_hits_polygon(trajectory.points,z) for z in hazard_zones)
+    if hit and surface<=surface_wind_limit_mps and shear<=shear_limit_s_inv:
+        pre_score=d/max(100.0,target_radius_m)-min(inside/3600.0,2.0)*0.15+(surface/max(0.1,surface_wind_limit_mps))*0.05+(shear/max(1e-9,shear_limit_s_inv))*0.05
+        return Candidate(launch_time,launch,trajectory,d,closest,inside,surface,shear,hazard_hit,restricted_hit,score=pre_score)
+    return None
+
+def _ensemble_metrics_batch(selected:list[Candidate],forecast:dict[str,Any],target:GeoPoint|None,target_polygon:list[GeoPoint]|None,target_radius_m:float,ensemble_members:int,ensemble_wind_sigma_mps:float,restricted_zones:list[list[GeoPoint]],hazard_zones:list[list[GeoPoint]],start_altitude:float,ascent_rate:float,max_altitude:float,duration_hours:float,step_minutes:int,progress_callback:ProgressCallback|None,started:float)->None:
+    member_count=max(1,ensemble_members);total=len(selected)*member_count;done=0;results=[[] for _ in selected]
+    tasks=[]
+    for idx,c in enumerate(selected):
+        params=FlightParameters(StartPoint(c.launch_point.lat,c.launch_point.lon),_utc(c.launch_time),start_altitude,ascent_rate,max_altitude,duration_hours,step_minutes)
+        for member in range(member_count):
+            tasks.append((idx,(params,forecast,target,target_polygon,target_radius_m,member,ensemble_wind_sigma_mps,restricted_zones,hazard_zones)))
+    workers=min(total,max(1,min(8,(os.cpu_count() or 4))))
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures=[executor.submit(_ensemble_member,a) for a in args]
-        for i,future in enumerate(as_completed(futures),1):
-            result=future.result()
-            if result is not None:d,ok=result;distances.append(d);successes+=int(ok)
-            if progress:progress(i)
-    if not distances:return 0.0,float("inf"),float("inf")
-    distances.sort();n=len(distances);return successes/n,distances[n//2],distances[min(n-1,int(0.90*(n-1)))]
+        futures=[(idx,executor.submit(_ensemble_member,args)) for idx,args in tasks]
+        for idx,future in futures:
+            result=future.result();
+            if result is not None:results[idx].append(result)
+            done+=1
+            if progress_callback:
+                elapsed=time.monotonic()-started;eta=elapsed/done*(total-done) if done else None;progress_callback({"stage":"ensemble","processed":done,"total":total,"percent":100*done/max(1,total),"elapsed_s":elapsed,"eta_s":eta,"message":f"Ансамблевый расчёт: кандидат {idx+1}/{len(selected)}"})
+    for c,values in zip(selected,results):
+        if not values:
+            c.ensemble_success_rate,c.ensemble_median_distance_m,c.ensemble_p90_distance_m=0.0,float("inf"),float("inf")
+            continue
+        distances=sorted(v[0] for v in values);successes=sum(1 for _,ok in values if ok);n=len(distances)
+        c.ensemble_success_rate=successes/n;c.ensemble_median_distance_m=distances[n//2];c.ensemble_p90_distance_m=distances[min(n-1,int(0.90*(n-1)))]
+        c.score=c.ensemble_p90_distance_m/max(100.0,target_radius_m)-c.ensemble_success_rate*2.0+c.min_distance_m/max(100.0,target_radius_m)
 
 def find_favorable_windows(*,target:GeoPoint|None,target_polygon:list[GeoPoint]|None=None,launch_center:GeoPoint,forecast:dict[str,Any],search_start:datetime,search_end:datetime,launch_radius_m:float,target_radius_m:float,time_step_hours:float,duration_hours:float,step_minutes:float,ascent_rate:float,max_altitude:float,start_altitude:float,launch_points_rings:int,launch_points_per_ring:int,surface_wind_limit_mps:float,shear_limit_s_inv:float,ensemble_members:int,ensemble_wind_sigma_mps:float,precipitation_limit_mm:float,restricted_zones:list[list[GeoPoint]]|None=None,hazard_zones:list[list[GeoPoint]]|None=None,progress_callback:ProgressCallback|None=None)->list[FavorableWindow]:
     search_start,search_end=_utc(search_start),_utc(search_end);restricted_zones=restricted_zones or [];hazard_zones=hazard_zones or []
     if target is None and not target_polygon:raise ValueError("Нужно задать target или target_polygon")
     points=generate_launch_points(launch_center,launch_radius_m,launch_points_rings,launch_points_per_ring);candidates=[];t=search_start;step=timedelta(hours=time_step_hours);times=[]
     while t<=search_end:times.append(t);t+=step
-    total_screen=len(points)*len(times);processed=0;started=time.monotonic()
-    if progress_callback:progress_callback({"stage":"screen","processed":0,"total":total_screen,"percent":0,"elapsed_s":0,"eta_s":None,"message":"Быстрый первичный отбор точек и времени","force":True})
+    total_screen=len(points)*len(times);started=time.monotonic()
+    if progress_callback:progress_callback({"stage":"screen","processed":0,"total":total_screen,"percent":0,"elapsed_s":0,"eta_s":None,"message":"Параллельный первичный отбор точек и времени","force":True})
+    screen_tasks=[]
+    calc_step=int(max(1,round(step_minutes)))
     for t in times:
+        launch_time=_utc(t)
         for launch in points:
-            params=FlightParameters(StartPoint(launch.lat,launch.lon),_utc(t),start_altitude,ascent_rate,max_altitude,duration_hours,int(max(1,round(step_minutes))))
-            try:trajectory=calculate_trajectory(params,forecast)
-            except Exception:processed+=1;continue
-            d,closest,inside,hit=_trajectory_quality(trajectory.points,target,target_radius_m,target_polygon);surface,shear=_surface_and_shear(forecast,launch,_utc(t),max_altitude);restricted_hit=any(_trajectory_hits_polygon(trajectory.points,z) for z in restricted_zones);hazard_hit=_weather_hazard(forecast,trajectory.points,precipitation_limit_mm) or any(_trajectory_hits_polygon(trajectory.points,z) for z in hazard_zones)
-            if hit and surface<=surface_wind_limit_mps and shear<=shear_limit_s_inv and not restricted_hit and not hazard_hit:
-                pre_score=d/max(100.0,target_radius_m)-min(inside/3600.0,2.0)*0.15+(surface/max(0.1,surface_wind_limit_mps))*0.05+(shear/max(1e-9,shear_limit_s_inv))*0.05;candidates.append(Candidate(_utc(t),launch,trajectory,d,closest,inside,surface,shear,hazard_hit,restricted_hit,score=pre_score))
-            processed+=1
+            params=FlightParameters(StartPoint(launch.lat,launch.lon),launch_time,start_altitude,ascent_rate,max_altitude,duration_hours,calc_step)
+            screen_tasks.append((launch_time,launch,params,forecast,target,target_polygon,target_radius_m,surface_wind_limit_mps,shear_limit_s_inv,precipitation_limit_mm,restricted_zones,hazard_zones))
+    workers=min(total_screen,max(1,min(8,(os.cpu_count() or 4))))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures=[executor.submit(_screen_candidate,args) for args in screen_tasks]
+        for processed,future in enumerate(futures,1):
+            candidate=future.result()
+            if candidate is not None:candidates.append(candidate)
             if progress_callback:
-                elapsed=time.monotonic()-started;eta=elapsed/processed*(total_screen-processed) if processed else None;progress_callback({"stage":"screen","processed":processed,"total":total_screen,"percent":100*processed/max(1,total_screen),"elapsed_s":elapsed,"eta_s":eta,"message":"Быстрый первичный отбор"})
+                elapsed=time.monotonic()-started;eta=elapsed/processed*(total_screen-processed) if processed else None;progress_callback({"stage":"screen","processed":processed,"total":total_screen,"percent":100*processed/max(1,total_screen),"elapsed_s":elapsed,"eta_s":eta,"message":"Параллельный первичный отбор"})
     if not candidates:
         if progress_callback:progress_callback({"stage":"done","processed":1,"total":1,"percent":100,"elapsed_s":time.monotonic()-started,"eta_s":0,"message":"Подходящих кандидатов не найдено","force":True})
         return []
@@ -182,18 +217,10 @@ def find_favorable_windows(*,target:GeoPoint|None,target_polygon:list[GeoPoint]|
     for c in best_per_time.values():
         if len(selected)>=min(len(candidates),target_count+len(best_per_time)):break
         if id(c) not in selected_ids:selected.append(c);selected_ids.add(id(c))
-    selected.sort(key=lambda c:c.score);total_ensemble=len(selected)*max(1,ensemble_members);ensemble_done=0
+    selected.sort(key=lambda c:c.score);total_ensemble=len(selected)*max(1,ensemble_members)
     if progress_callback:progress_callback({"stage":"ensemble","processed":0,"total":total_ensemble,"percent":0,"elapsed_s":time.monotonic()-started,"eta_s":None,"message":f"Точный ансамблевый расчёт: {len(selected)} перспективных кандидатов","force":True})
-    final=[]
-    for idx,c in enumerate(selected,1):
-        def member_progress(done:int,_idx=idx):
-            nonlocal ensemble_done
-            ensemble_done+=1
-            if progress_callback:
-                elapsed=time.monotonic()-started;eta=elapsed/ensemble_done*(total_ensemble-ensemble_done) if ensemble_done else None;progress_callback({"stage":"ensemble","processed":ensemble_done,"total":total_ensemble,"percent":100*ensemble_done/max(1,total_ensemble),"elapsed_s":elapsed,"eta_s":eta,"message":f"Ансамблевый расчёт: кандидат {_idx}/{len(selected)}"})
-        params=FlightParameters(StartPoint(c.launch_point.lat,c.launch_point.lon),_utc(c.launch_time),start_altitude,ascent_rate,max_altitude,duration_hours,int(max(1,round(step_minutes))))
-        success,median,p90=_ensemble_metrics(params,forecast,target,target_polygon,target_radius_m,ensemble_members,ensemble_wind_sigma_mps,restricted_zones,hazard_zones,member_progress);c.ensemble_success_rate,c.ensemble_median_distance_m,c.ensemble_p90_distance_m=success,median,p90;c.score=c.ensemble_p90_distance_m/max(100.0,target_radius_m)-c.ensemble_success_rate*2.0+c.min_distance_m/max(100.0,target_radius_m);final.append(c)
-    final.sort(key=lambda c:c.score);windows=[]
+    _ensemble_metrics_batch(selected,forecast,target,target_polygon,target_radius_m,ensemble_members,ensemble_wind_sigma_mps,restricted_zones,hazard_zones,start_altitude,ascent_rate,max_altitude,duration_hours,calc_step,progress_callback,started)
+    final=sorted(selected,key=lambda c:c.score);windows=[]
     for c in final:
         if not windows or _seconds_between(c.launch_time,windows[-1].window_end)>3600:windows.append(FavorableWindow(c.launch_time,c.launch_time,c.launch_time,[c]))
         else:windows[-1].window_end=max(windows[-1].window_end,c.launch_time);windows[-1].candidates.append(c);windows[-1].recommended_time=min(windows[-1].candidates,key=lambda x:x.score).launch_time
