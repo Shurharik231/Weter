@@ -157,7 +157,7 @@ def _screen_candidate(args):
     try:trajectory=calculate_trajectory(params,forecast)
     except Exception:return None
     d,closest,inside,hit=_trajectory_quality(trajectory.points,target,target_radius_m,target_polygon);surface,shear=_surface_and_shear(forecast,launch,launch_time,params.max_altitude);restricted_hit=any(_trajectory_hits_polygon(trajectory.points,z) for z in restricted_zones);hazard_hit=_weather_hazard(forecast,trajectory.points,precipitation_limit_mm) or any(_trajectory_hits_polygon(trajectory.points,z) for z in hazard_zones)
-    if hit and surface<=surface_wind_limit_mps and shear<=shear_limit_s_inv:
+    if hit and surface<=surface_wind_limit_mps and shear<=shear_limit_s_inv and not restricted_hit and not hazard_hit:
         pre_score=d/max(100.0,target_radius_m)-min(inside/3600.0,2.0)*0.15+(surface/max(0.1,surface_wind_limit_mps))*0.05+(shear/max(1e-9,shear_limit_s_inv))*0.05
         return Candidate(launch_time,launch,trajectory,d,closest,inside,surface,shear,hazard_hit,restricted_hit,score=pre_score)
     return None
@@ -173,7 +173,7 @@ def _ensemble_metrics_batch(selected:list[Candidate],forecast:dict[str,Any],targ
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures=[(idx,executor.submit(_ensemble_member,args)) for idx,args in tasks]
         for idx,future in futures:
-            result=future.result();
+            result=future.result()
             if result is not None:results[idx].append(result)
             done+=1
             if progress_callback:
@@ -193,8 +193,7 @@ def find_favorable_windows(*,target:GeoPoint|None,target_polygon:list[GeoPoint]|
     while t<=search_end:times.append(t);t+=step
     total_screen=len(points)*len(times);started=time.monotonic()
     if progress_callback:progress_callback({"stage":"screen","processed":0,"total":total_screen,"percent":0,"elapsed_s":0,"eta_s":None,"message":"Параллельный первичный отбор точек и времени","force":True})
-    screen_tasks=[]
-    calc_step=int(max(1,round(step_minutes)))
+    screen_tasks=[];calc_step=int(max(1,round(step_minutes)))
     for t in times:
         launch_time=_utc(t)
         for launch in points:
