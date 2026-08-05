@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from math import asin, cos, degrees, radians, sin, sqrt, atan2
 import random
 import time
@@ -14,6 +14,17 @@ from weather import interpolate_wind
 
 EARTH_RADIUS_M = 6_371_000.0
 ProgressCallback = Callable[[dict], None]
+
+
+def _utc(value: datetime) -> datetime:
+    """Normalize every internal datetime to timezone-aware UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _seconds_between(a: datetime, b: datetime) -> float:
+    return (_utc(a) - _utc(b)).total_seconds()
 
 @dataclass(frozen=True)
 class GeoPoint:
@@ -95,7 +106,7 @@ def _trajectory_quality(points: list[TrajectoryPoint], target: GeoPoint | None, 
             if db < best_d: best_d, best = db, b
         ia = _target_membership(GeoPoint(a.lat, a.lon), target, radius_m, target_polygon)
         ib = _target_membership(GeoPoint(b.lat, b.lon), target, radius_m, target_polygon)
-        dt = max(0.0, (b.time - a.time).total_seconds())
+        dt = max(0.0, _seconds_between(b.time, a.time))
         if ia and ib: inside += dt; hit = True
         elif ia != ib: inside += dt * 0.5; hit = True
     if target is not None and len(points) == 1:
@@ -106,11 +117,12 @@ def _trajectory_quality(points: list[TrajectoryPoint], target: GeoPoint | None, 
     return best_d, best, inside, hit
 
 def _wind_vector(forecast: dict[str, Any], lat: float, lon: float, altitude: float, when: datetime) -> tuple[float, float]:
-    speed, direction = interpolate_wind(forecast, lat, lon, altitude, when)
+    speed, direction = interpolate_wind(forecast, lat, lon, altitude, _utc(when))
     towards = radians((direction + 180) % 360)
     return speed * sin(towards), speed * cos(towards)
 
 def _surface_and_shear(forecast: dict[str, Any], point: GeoPoint, when: datetime, top_m: float) -> tuple[float, float]:
+    when = _utc(when)
     surface = interpolate_wind(forecast, point.lat, point.lon, 10.0, when)[0]
     top_u, top_v = _wind_vector(forecast, point.lat, point.lon, max(100.0, top_m), when)
     low_u, low_v = _wind_vector(forecast, point.lat, point.lon, 10.0, when)
@@ -123,7 +135,9 @@ def _weather_hazard(forecast: dict[str, Any], points: list[TrajectoryPoint], pre
         cell = min(cells, key=lambda c: (float(c.get("latitude", 0))-p.lat)**2 + (float(c.get("longitude", 0))-p.lon)**2)
         hourly = cell.get("hourly", {}); times = hourly.get("time", [])
         if not times: continue
-        idx = min(range(len(times)), key=lambda i: abs(datetime.fromisoformat(times[i].replace("Z", "+00:00")) - p.time))
+        p_time = _utc(p.time)
+        parsed_times = [_utc(datetime.fromisoformat(t.replace("Z", "+00:00"))) for t in times]
+        idx = min(range(len(parsed_times)), key=lambda i: abs(_seconds_between(parsed_times[i], p_time)))
         codes = hourly.get("weather_code", []); precip = hourly.get("precipitation", [])
         code = codes[idx] if idx < len(codes) else None; rain = precip[idx] if idx < len(precip) and precip[idx] is not None else 0.0
         if code is not None and int(code) in {95, 96, 99}: return True
@@ -171,6 +185,7 @@ def _ensemble_metrics(params: FlightParameters, base_forecast: dict[str, Any], t
     return successes / n, distances[n//2], distances[min(n-1, int(0.90*(n-1)))]
 
 def find_favorable_windows(*, target: GeoPoint | None, target_polygon: list[GeoPoint] | None = None, launch_center: GeoPoint, forecast: dict[str, Any], search_start: datetime, search_end: datetime, launch_radius_m: float, target_radius_m: float, time_step_hours: float, duration_hours: float, step_minutes: float, ascent_rate: float, max_altitude: float, start_altitude: float, launch_points_rings: int, launch_points_per_ring: int, surface_wind_limit_mps: float, shear_limit_s_inv: float, ensemble_members: int, ensemble_wind_sigma_mps: float, precipitation_limit_mm: float, restricted_zones: list[list[GeoPoint]] | None = None, hazard_zones: list[list[GeoPoint]] | None = None, progress_callback: ProgressCallback | None = None) -> list[FavorableWindow]:
+    search_start, search_end = _utc(search_start), _utc(search_end)
     restricted_zones = restricted_zones or []; hazard_zones = hazard_zones or []
     if target is None and not target_polygon: raise ValueError("Нужно задать target или target_polygon")
     points = generate_launch_points(launch_center, launch_radius_m, launch_points_rings, launch_points_per_ring)
@@ -181,18 +196,16 @@ def find_favorable_windows(*, target: GeoPoint | None, target_polygon: list[GeoP
     if progress_callback: progress_callback({"stage":"screen","processed":0,"total":total_screen,"percent":0,"elapsed_s":0,"eta_s":None,"message":"Быстрый первичный отбор точек и времени","force":True})
     for t in times:
         for launch in points:
-            params = FlightParameters(StartPoint(launch.lat, launch.lon), t, start_altitude, ascent_rate, max_altitude, duration_hours, int(max(1, round(step_minutes))))
+            params = FlightParameters(StartPoint(launch.lat, launch.lon), _utc(t), start_altitude, ascent_rate, max_altitude, duration_hours, int(max(1, round(step_minutes))))
             try: trajectory = calculate_trajectory(params, forecast)
             except Exception: processed += 1; continue
             d, closest, inside, hit = _trajectory_quality(trajectory.points, target, target_radius_m, target_polygon)
-            surface, shear = _surface_and_shear(forecast, launch, t, max_altitude)
+            surface, shear = _surface_and_shear(forecast, launch, _utc(t), max_altitude)
             restricted_hit = any(_trajectory_hits_polygon(trajectory.points, z) for z in restricted_zones)
             hazard_hit = _weather_hazard(forecast, trajectory.points, precipitation_limit_mm) or any(_trajectory_hits_polygon(trajectory.points, z) for z in hazard_zones)
             if hit and surface <= surface_wind_limit_mps and shear <= shear_limit_s_inv and not restricted_hit and not hazard_hit:
-                # Preliminary score is cheap and is only used to decide which candidates
-                # deserve the expensive ensemble stage.
                 pre_score = d / max(100.0, target_radius_m) - min(inside / 3600.0, 2.0) * 0.15 + (surface / max(0.1, surface_wind_limit_mps))*0.05 + (shear / max(1e-9, shear_limit_s_inv))*0.05
-                candidates.append(Candidate(t, launch, trajectory, d, closest, inside, surface, shear, hazard_hit, restricted_hit, score=pre_score))
+                candidates.append(Candidate(_utc(t), launch, trajectory, d, closest, inside, surface, shear, hazard_hit, restricted_hit, score=pre_score))
             processed += 1
             if progress_callback:
                 elapsed = time.monotonic() - started; eta = elapsed / processed * (total_screen - processed) if processed else None
@@ -200,10 +213,6 @@ def find_favorable_windows(*, target: GeoPoint | None, target_polygon: list[GeoP
     if not candidates:
         if progress_callback: progress_callback({"stage":"done","processed":1,"total":1,"percent":100,"elapsed_s":time.monotonic()-started,"eta_s":0,"message":"Подходящих кандидатов не найдено","force":True})
         return []
-
-    # Expensive ensemble work is deliberately limited to the strongest candidates
-    # plus the best candidate at every launch time. This keeps temporal coverage
-    # while avoiding thousands of redundant 50-member ensemble calculations.
     candidates.sort(key=lambda c: c.score)
     target_count = min(len(candidates), max(24, int(len(candidates) * 0.20)))
     selected = candidates[:target_count]
@@ -225,29 +234,20 @@ def find_favorable_windows(*, target: GeoPoint | None, target_polygon: list[GeoP
             ensemble_done += 1
             if progress_callback:
                 elapsed = time.monotonic() - started; eta = elapsed / ensemble_done * (total_ensemble - ensemble_done) if ensemble_done else None
-                progress_callback({"stage":"ensemble","processed":ensemble_done,"total":total_ensemble,"percent":100*ensemble_done/max(1,total_ensemble),"elapsed_s":elapsed,"eta_s":eta,"message":f"Ансамбль { _idx }/{len(selected)}"})
-        success_rate, median_d, p90_d = _ensemble_metrics(FlightParameters(StartPoint(c.launch_point.lat, c.launch_point.lon), c.launch_time, start_altitude, ascent_rate, max_altitude, duration_hours, int(max(1, round(step_minutes)))), forecast, target, target_polygon, target_radius_m, ensemble_members, ensemble_wind_sigma_mps, restricted_zones, hazard_zones, member_progress)
-        if success_rate <= 0: continue
-        radius = max(100.0, target_radius_m)
-        c.ensemble_success_rate = success_rate; c.ensemble_median_distance_m = median_d; c.ensemble_p90_distance_m = p90_d
-        c.score = 2.0*(1-success_rate) + median_d/radius + 0.75*p90_d/radius - min(c.time_in_target_s/3600.0, 2.0)*0.25
+                progress_callback({"stage":"ensemble","processed":ensemble_done,"total":total_ensemble,"percent":100*ensemble_done/max(1,total_ensemble),"elapsed_s":elapsed,"eta_s":eta,"message":f"Ансамблевый расчёт: кандидат {_idx}/{len(selected)}"})
+        params = FlightParameters(StartPoint(c.launch_point.lat, c.launch_point.lon), _utc(c.launch_time), start_altitude, ascent_rate, max_altitude, duration_hours, int(max(1, round(step_minutes))))
+        success, median, p90 = _ensemble_metrics(params, forecast, target, target_polygon, target_radius_m, ensemble_members, ensemble_wind_sigma_mps, restricted_zones, hazard_zones, member_progress)
+        c.ensemble_success_rate, c.ensemble_median_distance_m, c.ensemble_p90_distance_m = success, median, p90
+        c.score = c.ensemble_p90_distance_m / max(100.0, target_radius_m) - c.ensemble_success_rate * 2.0 + c.min_distance_m / max(100.0, target_radius_m)
         final.append(c)
-    if not final:
-        if progress_callback: progress_callback({"stage":"done","processed":1,"total":1,"percent":100,"elapsed_s":time.monotonic()-started,"eta_s":0,"message":"Ансамбль не подтвердил подходящих вариантов","force":True})
-        return []
-
-    best_by_time: dict[datetime, Candidate] = {}
+    final.sort(key=lambda c: c.score)
+    windows: list[FavorableWindow] = []
     for c in final:
-        if c.launch_time not in best_by_time or c.score < best_by_time[c.launch_time].score: best_by_time[c.launch_time] = c
-    successful = sorted(best_by_time.values(), key=lambda c: c.launch_time)
-    groups: list[list[Candidate]] = []; max_gap = step * 1.5
-    for c in successful:
-        if not groups or c.launch_time - groups[-1][-1].launch_time > max_gap: groups.append([c])
-        else: groups[-1].append(c)
-    half = step / 2; windows = []
-    for group in groups:
-        group.sort(key=lambda c: c.score)
-        windows.append(FavorableWindow(group[0].launch_time - half, group[-1].launch_time + half, group[0].launch_time, group[:5]))
-    windows = sorted(windows, key=lambda w: w.candidates[0].score)
-    if progress_callback: progress_callback({"stage":"done","processed":1,"total":1,"percent":100,"elapsed_s":time.monotonic()-started,"eta_s":0,"message":f"Готово: найдено окон — {len(windows)}","force":True})
+        if not windows or _seconds_between(c.launch_time, windows[-1].window_end) > 3600:
+            windows.append(FavorableWindow(c.launch_time, c.launch_time, c.launch_time, [c]))
+        else:
+            windows[-1].window_end = max(windows[-1].window_end, c.launch_time)
+            windows[-1].candidates.append(c)
+            windows[-1].recommended_time = min(windows[-1].candidates, key=lambda x: x.score).launch_time
+    if progress_callback: progress_callback({"stage":"done","processed":1,"total":1,"percent":100,"elapsed_s":time.monotonic()-started,"eta_s":0,"message":"Расчёт завершён","force":True})
     return windows
