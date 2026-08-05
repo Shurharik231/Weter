@@ -60,7 +60,6 @@ async def fetch_grid(latitudes, longitudes, start: datetime, end: datetime) -> d
         "end_date": end.date().isoformat(),
         "timezone": "UTC",
         "wind_speed_unit": "ms",
-        "forecast_days": min(16, max(1, int((horizon_hours + 23.999) // 24))),
     }
     async with httpx.AsyncClient(timeout=90) as client:
         response = await client.get(OPEN_METEO_URL, params=params)
