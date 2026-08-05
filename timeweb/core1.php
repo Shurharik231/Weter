@@ -18,8 +18,6 @@ function forecastRadius(float $hours):float{return min(8000.0,max(600.0,600.0+$h
 function grid(float $lat,float $lon,float $radiusKm):array{$ld=$radiusKm/111.0;$od=$radiusKm/max(20.0,111*cos(deg2rad($lat)));$ls=[];$os=[];foreach([-1,-.5,0,.5,1] as $x){$ls[]=$lat+$ld*$x;$os[]=$lon+$od*$x;}return[$ls,$os];}
 function parsePoint(array $a,string $name):array{if(!isset($a['lat'],$a['lon']))throw new RuntimeException("Не указана точка $name");$lat=(float)$a['lat'];$lon=(float)$a['lon'];if($lat<-90||$lat>90||$lon<-180||$lon>180)throw new RuntimeException("Некорректные координаты: $name");return[$lat,$lon];}
 function gaussian():float{$u=max(1e-12,mt_rand()/mt_getrandmax());$v=max(1e-12,mt_rand()/mt_getrandmax());return sqrt(-2*log($u))*cos(2*M_PI*$v);}
-
-// The browser performs the heavy numerical work. Registering at shutdown places
-// the script after the existing inline UI script, so the public API and old UI
-// remain compatible while Timeweb does not have to hold a long PHP request.
-if(!isset($_GET['api']))register_shutdown_function(static function():void{echo '<script src="engine.js?v=20260805"></script>';});
+if(!isset($_GET['api']))register_shutdown_function(static function():void{
+  echo '<script src="engine.js?v=20260805"></script><script src="engine-compat.js?v=20260805"></script>';
+});
