@@ -74,9 +74,45 @@ function updateFavProgress(d){
 }
 function stopFavPolling(){if(favPollTimer){clearInterval(favPollTimer);favPollTimer=null;}}
 
+function favDistanceMeters(a,b){
+    var R=6371000,p1=Number(a[0])*Math.PI/180,p2=Number(b[0])*Math.PI/180,dp=(Number(b[0])-Number(a[0]))*Math.PI/180,dl=(Number(b[1])-Number(a[1]))*Math.PI/180;
+    var h=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+    return 2*R*Math.asin(Math.min(1,Math.sqrt(h)));
+}
+function favTargetHit(point){
+    var lat=Number(point.lat),lon=Number(point.lon),tlat=Number(favEl("fav-target-lat")?.value),tlon=Number(favEl("fav-target-lon")?.value),radius=Number(favEl("fav-max-dist")?.value)||5000;
+    return validFavCoordinates(lat,lon)&&validFavCoordinates(tlat,tlon)&&favDistanceMeters([lat,lon],[tlat,tlon])<=radius;
+}
+function favTrajectoryParts(points){
+    if(!points||points.length<2)return {before:points||[],after:[]};
+    var entry=-1;
+    for(var i=0;i<points.length;i++){if(favTargetHit(points[i])){entry=i;break;}}
+    if(entry<0){
+        // If the exact crossing lies between two trajectory samples, split at the
+        // nearest sample before the target and leave the complete line visible.
+        var min=Infinity,nearest=0;
+        for(var j=0;j<points.length;j++){var d=favDistanceMeters([points[j].lat,points[j].lon],[Number(favEl("fav-target-lat")?.value),Number(favEl("fav-target-lon")?.value)]);if(d<min){min=d;nearest=j;}}
+        return {before:points.slice(0,nearest+1),after:points.slice(nearest)};
+    }
+    return {before:points.slice(0,entry+1),after:points.slice(entry)};
+}
+function addFavTrajectoryLine(group,points,isBest,windowIndex,candidate){
+    if(!points||points.length<2)return;
+    var parts=favTrajectoryParts(points),all=points.map(function(p){return[p.lat,p.lon]});
+    var before=parts.before.map(function(p){return[p.lat,p.lon]}),after=parts.after.map(function(p){return[p.lat,p.lon]});
+    // The segment from launch to first contact with the target area is red.
+    // The part after entering the target area remains visible but muted.
+    if(before.length>=2)L.polyline(before,{color:"#dc2626",weight:isBest?6:4,opacity:isBest?.95:.72}).addTo(group);
+    if(after.length>=2){var line=L.polyline(after,{color:isBest?"#2563eb":"#7c3aed",weight:isBest?4:2,opacity:isBest?.7:.28,dashArray:isBest?null:"6 8"}).addTo(group);line.bindTooltip("После входа в целевую область",{sticky:true});}
+    var first=before[before.length-1];
+    if(first)L.circleMarker(first,{radius:isBest?6:4,color:"#dc2626",fillColor:"#dc2626",fillOpacity:1,weight:2}).addTo(group);
+    var popup="Окно "+(windowIndex+1)+"<br>Запуск: "+new Date(candidate.launch_time).toLocaleString("ru-RU")+"<br>Минимум до цели: "+Math.round(candidate.min_distance_to_target_m)+" м<br>В цели: "+(Number(candidate.time_in_target_s||0)/60).toFixed(1)+" мин";
+    var hitLine=L.polyline(all,{color:"transparent",weight:12,opacity:0}).addTo(group);hitLine.bindPopup(popup);
+}
 function renderFavorableMap(data){
-    if(!favMapReady())return;clearFavorableMap();var group=L.layerGroup().addTo(map);favTrajectoryLayer=group,bounds=[];
-    var windows=data.windows||[];windows.forEach(function(windowItem,wi){(windowItem.best_candidates||[]).forEach(function(candidate,ci){var points=candidate.trajectory&&candidate.trajectory.points||[];if(points.length<2)return;var latlngs=points.map(function(p){return[p.lat,p.lon]});latlngs.forEach(function(p){bounds.push(p)});var isBest=wi===0&&ci===0;var line=L.polyline(latlngs,{color:isBest?"#2563eb":"#7c3aed",weight:isBest?5:2,opacity:isBest?.95:.25,dashArray:isBest?null:"6 8"}).addTo(group);line.bindTooltip(isBest?"Рекомендуемая траектория":"Возможный сценарий",{sticky:true});line.bindPopup("Окно "+(wi+1)+"<br>Запуск: "+new Date(candidate.launch_time).toLocaleString("ru-RU")+"<br>Мин. расстояние: "+Math.round(candidate.min_distance_to_target_m)+" м<br>В цели: "+(Number(candidate.time_in_target_s||0)/60).toFixed(1)+" мин");});});if(bounds.length)map.fitBounds(bounds,{padding:[40,40],maxZoom:11});
+    if(!favMapReady())return;clearFavorableMap();var group=L.layerGroup().addTo(map);favTrajectoryLayer=group;var bounds=[];
+    var windows=data.windows||[];windows.forEach(function(windowItem,wi){(windowItem.best_candidates||[]).forEach(function(candidate,ci){var points=candidate.trajectory&&candidate.trajectory.points||[];if(points.length<2)return;points.forEach(function(p){bounds.push([p.lat,p.lon]);});var isBest=wi===0&&ci===0;addFavTrajectoryLine(group,points,isBest,wi,candidate);});});
+    if(bounds.length)map.fitBounds(bounds,{padding:[40,40],maxZoom:11});
 }
 function formatMeters(value){var n=Number(value);if(!Number.isFinite(n))return"—";return n>=1000?(n/1000).toFixed(2)+" км":Math.round(n)+" м";}
 function renderFavorableResults(data){
