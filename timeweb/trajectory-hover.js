@@ -1,10 +1,53 @@
 (()=>{
 'use strict';
-function esc(v){return String(v??'').replace(/[&<>\"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[m]));}
-function num(p,keys){for(const k of keys){const n=Number(p?.[k]);if(Number.isFinite(n))return n}return 0}
-function chart(points,keys,label,unit){const vals=points.map(p=>num(p,keys));if(vals.length<2)return '<div style="font-size:11px;color:#667">Недостаточно точек для графика.</div>';const W=420,H=135,L=32,R=8,T=10,B=22,min=Math.min(...vals),max=Math.max(...vals),range=Math.max(1e-9,max-min);const path=points.map((p,i)=>{const x=L+(W-L-R)*i/(points.length-1),y=H-B-(H-T-B)*(num(p,keys)-min)/range;return `${i?'L':'M'}${x.toFixed(1)} ${y.toFixed(1)}`}).join(' ');const t0=points[0].time?new Date(points[0].time).toLocaleTimeString():'';const t1=points.at(-1).time?new Date(points.at(-1).time).toLocaleTimeString():'';return `<div style="font-size:11px;color:#667;margin:7px 0 2px"><b>${esc(label)}</b>, ${esc(unit)}</div><svg viewBox="0 0 ${W} ${H}" style="width:100%;height:135px;border:1px solid #edf0f2;border-radius:6px;background:#fafbfc;display:block"><line x1="${L}" y1="${T}" x2="${L}" y2="${H-B}" stroke="#cfd6dc"/><line x1="${L}" y1="${H-B}" x2="${W-R}" y2="${H-B}" stroke="#cfd6dc"/><path d="${path}" fill="none" stroke="#1f6feb" stroke-width="2"/><text x="3" y="15" font-size="9" fill="#667">${max.toFixed(0)}</text><text x="3" y="${H-B}" font-size="9" fill="#667">${min.toFixed(0)}</text><text x="${L}" y="${H-5}" font-size="9" fill="#667">${esc(t0)}</text><text x="${W-R-38}" y="${H-5}" font-size="9" fill="#667">${esc(t1)}</text></svg>`}
-function content(points,title){const a=points.map(p=>num(p,['altitude_m','altitude'])),s=points.map(p=>num(p,['speed_mps','wind_speed_mps','ground_speed_mps']));const first=points[0],last=points.at(-1),step=points.length>1&&first.time&&last.time?((new Date(last.time)-new Date(first.time))/1000/(points.length-1)/60).toFixed(1)+' мин':'—';return `<div style="font:12px Inter,Arial,sans-serif;color:#17202a;min-width:380px"><h4 style="margin:0 0 8px">${esc(title||'Траектория')}</h4><div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px"><div><b>Начало:</b> ${esc(first.time?new Date(first.time).toLocaleString():'—')}</div><div><b>Конец:</b> ${esc(last.time?new Date(last.time).toLocaleString():'—')}</div><div><b>Высота в конце:</b> ${Math.round(a.at(-1))} м</div><div><b>Макс. высота:</b> ${Math.round(Math.max(...a))} м</div><div><b>Скорость в конце:</b> ${s.at(-1).toFixed(2)} м/с</div><div><b>Макс. скорость:</b> ${Math.max(...s).toFixed(2)} м/с</div><div><b>Точек:</b> ${points.length}</div><div><b>Шаг:</b> ${step}</div></div>${chart(points,['altitude_m','altitude'],'Высота','м')}${chart(points,['speed_mps','wind_speed_mps','ground_speed_mps'],'Скорость','м/с')}</div>`}
-function showPoints(layer){const points=layer._trajectoryPoints;if(!points||points.length<2)return;if(layer._trajectoryPointMarkers){map.removeLayer(layer._trajectoryPointMarkers);layer._trajectoryPointMarkers=null;return;}const group=L.layerGroup();const fill=layer._trajectoryPointColor||'#ffd400',border=layer._trajectoryPointBorder||'#ff3b30';points.forEach((p,i)=>{const marker=L.circleMarker([p.lat,p.lon],{radius:4,weight:2,color:border,fillColor:fill,fillOpacity:.96});marker.bindTooltip(`<b>Точка ${i+1}</b><br>Время: ${p.time?new Date(p.time).toLocaleString():'—'}<br>Высота: ${num(p,['altitude_m','altitude']).toFixed(0)} м<br>Скорость: ${num(p,['speed_mps','wind_speed_mps','ground_speed_mps']).toFixed(2)} м/с`,{direction:'top',sticky:true});marker.addTo(group)});group.addTo(map);layer._trajectoryPointMarkers=group}
-function enhance(layer){if(!layer||layer._trajectoryEnhanced)return layer;layer._trajectoryEnhanced=true;layer._trajectoryPointColor='#ffd400';layer._trajectoryPointBorder='#ff3b30';layer.bindPopup(()=>{const pts=layer._trajectoryPoints;return pts&&pts.length>1?content(pts,layer._trajectoryTitle):'<div>Данные траектории ещё не доступны.</div>'},{maxWidth:460,autoPan:false,closeButton:true,closeOnClick:false});layer.on('mouseover',e=>{const pts=layer._trajectoryPoints;if(!pts||pts.length<2)return;const w=layer.options.weight||3;layer._trajectoryBaseWeight=w;layer.setStyle({weight:Math.max(w+2,6)});layer.bringToFront();layer.openPopup(e.latlng)});layer.on('mousemove',e=>{if(layer.isPopupOpen())layer.getPopup().setLatLng(e.latlng)});layer.on('mouseout',()=>{layer.setStyle({weight:layer._trajectoryBaseWeight||3})});layer.on('click',e=>{const pts=layer._trajectoryPoints;if(!pts||pts.length<2)return;layer.setStyle({weight:Math.max((layer._trajectoryBaseWeight||3)+2,6)});layer.bringToFront();layer.openPopup(e.latlng);showPoints(layer)});layer.on('popupclose',()=>layer.setStyle({weight:layer._trajectoryBaseWeight||3}));layer.on('remove',()=>{if(layer._trajectoryPointMarkers)map.removeLayer(layer._trajectoryPointMarkers)});return layer}
-const originalPolyline=L.polyline;L.polyline=function(...args){const layer=originalPolyline.apply(this,args);return enhance(layer)};
+const MARKER_FILL='#ffd400';
+const MARKER_BORDER='#111827';
+function value(p,keys){for(const k of keys){const n=Number(p?.[k]);if(Number.isFinite(n))return n}return 0}
+function pointMarkers(layer){
+  const points=layer._trajectoryPoints;
+  if(!Array.isArray(points)||points.length<2)return;
+  if(layer._trajectoryPointMarkers){map.removeLayer(layer._trajectoryPointMarkers);layer._trajectoryPointMarkers=null;return;}
+  const group=L.layerGroup();
+  points.forEach((p,i)=>{
+    const marker=L.circleMarker([Number(p.lat),Number(p.lon)],{
+      radius:4,
+      color:MARKER_BORDER,
+      weight:2,
+      fillColor:MARKER_FILL,
+      fillOpacity:.98
+    });
+    const time=p.time?new Date(p.time).toLocaleString():'—';
+    marker.bindTooltip(
+      `<b>Точка ${i+1}</b><br>Время: ${time}<br>Высота: ${value(p,['altitude_m','altitude']).toFixed(0)} м<br>Скорость: ${value(p,['speed_mps','wind_speed_mps','ground_speed_mps']).toFixed(2)} м/с`,
+      {direction:'top',sticky:true}
+    );
+    marker.addTo(group);
+  });
+  group.addTo(map);
+  layer._trajectoryPointMarkers=group;
+}
+function enhance(layer){
+  if(!layer||layer._trajectoryEnhanced)return;
+  layer._trajectoryEnhanced=true;
+  layer.on('click',e=>{
+    if(Array.isArray(layer._trajectoryPoints)&&layer._trajectoryPoints.length>1){
+      layer.setStyle({weight:Math.max(Number(layer.options.weight)||3,6)});
+      layer.bringToFront();
+      if(typeof showTrajectoryInfo==='function')showTrajectoryInfo(layer._trajectoryPoints,layer._trajectoryTitle||'Траектория',e.originalEvent);
+      pointMarkers(layer);
+    }
+  });
+  layer.on('remove',()=>{
+    if(layer._trajectoryPointMarkers){map.removeLayer(layer._trajectoryPointMarkers);layer._trajectoryPointMarkers=null;}
+  });
+}
+const originalPolyline=L.polyline;
+L.polyline=function(points,options,...rest){
+  const layer=originalPolyline.call(this,points,options,...rest);
+  if(Array.isArray(points)&&points.length){
+    layer._trajectoryPoints=points.map(p=>Array.isArray(p)?{lat:Number(p[0]),lon:Number(p[1])}:p);
+  }
+  enhance(layer);
+  return layer;
+};
 })();
