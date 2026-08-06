@@ -50,4 +50,48 @@ L.polyline=function(points,options,...rest){
   enhance(layer);
   return layer;
 };
+
+/* Only the four map-selection markers requested for the existing modes. */
+const selectionMarkers={direct:null,back:null,target:null,launch:null};
+const selectionKinds={};
+function markerIcon(color){
+  return L.divIcon({
+    className:'weter-selection-marker',
+    html:`<span style="display:block;width:20px;height:20px;border-radius:50% 50% 50% 0;background:${color};border:2px solid #fff;box-shadow:0 1px 5px #0008;transform:rotate(-45deg)"></span>`,
+    iconSize:[20,20],iconAnchor:[10,20]
+  });
+}
+function removeDefaultMarkerAt(lat,lng){
+  map.eachLayer(layer=>{
+    if(!(layer instanceof L.Marker)||!layer.getLatLng)return;
+    const ll=layer.getLatLng();
+    const own=layer.options?.icon?.options?.className==='weter-selection-marker';
+    if(!own&&Math.abs(ll.lat-lat)<1e-8&&Math.abs(ll.lng-lng)<1e-8)map.removeLayer(layer);
+  });
+}
+function placeSelectionMarker(kind,lat,lng){
+  if(selectionMarkers[kind])map.removeLayer(selectionMarkers[kind]);
+  const colors={direct:'#16a34a',back:'#7c3aed',target:'#dc2626',launch:'#2563eb'};
+  selectionMarkers[kind]=L.marker([lat,lng],{icon:markerIcon(colors[kind])}).addTo(map);
+  setTimeout(()=>removeDefaultMarkerAt(lat,lng),0);
+}
+function installSelectionMarkers(){
+  const buttons=document.querySelectorAll('.panel .secondary');
+  buttons.forEach(button=>button.addEventListener('click',()=>{
+    const panel=button.closest('.panel');
+    if(!panel)return;
+    let kind=null;
+    if(panel.id==='direct')kind='direct';
+    else if(panel.id==='back')kind='back';
+    else if(panel.id==='fav')kind=button.textContent.includes('цель')?'target':'launch';
+    if(kind)selectionKinds.pending=kind;
+  }));
+  map.on('click',e=>{
+    const kind=selectionKinds.pending;
+    if(!kind)return;
+    selectionKinds.pending=null;
+    placeSelectionMarker(kind,e.latlng.lat,e.latlng.lng);
+  });
+}
+installSelectionMarkers();
 })();
