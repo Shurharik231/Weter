@@ -43,14 +43,16 @@ function removeDefaultMarkerAt(lat,lng){
   map.eachLayer(layer=>{
     if(!(layer instanceof L.Marker)||!layer.getLatLng)return;
     const ll=layer.getLatLng(),own=layer.options?.icon?.options?.className==='weter-selection-marker';
-    if(!own&&Math.abs(ll.lat-lat)<1e-8&&Math.abs(ll.lng-lng)<1e-8)map.removeLayer(layer);
+    if(!own&&Math.abs(ll.lat-lat)<0.00001&&Math.abs(ll.lng-lng)<0.00001)map.removeLayer(layer);
   });
 }
 function placeSelectionMarker(kind,lat,lng){
   if(selectionMarkers[kind])map.removeLayer(selectionMarkers[kind]);
   const colors={direct:'#16a34a',back:'#7c3aed',target:'#dc2626',launch:'#2563eb'};
   selectionMarkers[kind]=L.marker([lat,lng],{icon:markerIcon(colors[kind])}).addTo(map);
-  setTimeout(()=>removeDefaultMarkerAt(lat,lng),0);
+  removeDefaultMarkerAt(lat,lng);
+  setTimeout(()=>removeDefaultMarkerAt(lat,lng),50);
+  setTimeout(()=>removeDefaultMarkerAt(lat,lng),250);
 }
 function installSelectionMarkers(){
   document.querySelectorAll('.panel .secondary').forEach(button=>button.addEventListener('click',()=>{
