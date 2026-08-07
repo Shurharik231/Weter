@@ -37,7 +37,6 @@
     const activeMode=()=>document.querySelector('.tab.active')?.dataset.panel||'direct';
     const showDock=(mode=activeMode())=>{
       lastSelectedMode=mode;
-      const fn=actionMap[mode];
       dockButton.textContent=actionLabels[mode]||'Рассчитать';
       dock.classList.add('open');
     };
@@ -47,8 +46,6 @@
     toggle.addEventListener('click',()=>setOpen(side.classList.contains('ui-collapsed')));
     backdrop.addEventListener('click',()=>setOpen(false));
 
-    // На мобильном после выбора режима меню остаётся открытым. Закрывается только
-    // когда пользователь действительно переходит к выбору точки на карте.
     document.querySelectorAll('.secondary').forEach(btn=>btn.addEventListener('click',()=>{
       selecting=true;
       lastSelectedMode=activeMode();
@@ -56,7 +53,6 @@
       setOpen(false);
     }));
 
-    // Один клик по карте после выбора точки возвращает компактную кнопку расчёта.
     const attachMapSelectionUi=()=>{
       try{
         if(typeof map==='undefined'||!map||typeof map.on!=='function')return false;
@@ -78,12 +74,9 @@
       hideDock();
       if(typeof window[fn]==='function'){
         window[fn]();
-        // Результат остаётся доступным в привычной панели, которая плавно открывается сама.
-        setTimeout(()=>setOpen(true),500);
       }
     });
 
-    // На обычном десктопе новый мобильный workflow не активен.
     window.addEventListener('resize',()=>{
       if(innerWidth>850){setOpen(true);hideDock();selecting=false;}
     });
