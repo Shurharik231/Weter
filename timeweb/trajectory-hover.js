@@ -63,7 +63,8 @@ function installSelectionMarkers(){
 function installDocuments(){
   if(document.getElementById('weter-docs'))return;
   const style=document.createElement('style');style.id='weter-docs-style';style.textContent=`
-  .weter-doc-links{position:static;width:100%;display:flex;gap:8px;align-items:stretch;margin:18px 0 2px;padding-top:14px;border-top:1px solid #e1e6ea}
+  /* Документация является частью бокового меню, а не плавающим слоем карты. */
+  .side > .weter-doc-links{position:static!important;left:auto!important;right:auto!important;top:auto!important;bottom:auto!important;float:none!important;clear:both!important;z-index:auto!important;width:100%;display:flex;gap:8px;align-items:stretch;margin:22px 0 0;padding:14px 0 2px;border-top:1px solid #e1e6ea}
   .weter-doc-btn{flex:1;min-width:0;border:1px solid #cbd3da;background:#f8fafb;color:#17202a;border-radius:9px;padding:10px 9px;font:600 12px/1.2 Inter,Arial,sans-serif;box-shadow:0 1px 4px #0001;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease}
   .weter-doc-btn:hover{background:#f0f3f6;transform:translateY(-1px);box-shadow:0 3px 10px #0002}.weter-doc-btn:active{transform:translateY(0)}
   .weter-doc-modal{position:fixed;inset:0;width:100%;height:100%;height:100dvh;z-index:30000;background:rgba(15,23,42,.48);display:flex;align-items:center;justify-content:center;padding:16px;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .2s ease,visibility .2s ease}
@@ -75,7 +76,7 @@ function installDocuments(){
   .weter-doc-close{flex:0 0 34px;width:34px;height:34px;border:1px solid #d5dbe1;border-radius:50%;background:#f7f8fa;color:#334155;font-size:22px;line-height:30px;text-align:center;padding:0;cursor:pointer;box-shadow:0 1px 4px #0002;display:flex;align-items:center;justify-content:center}
   .weter-doc-close:hover{background:#eef1f4}.weter-doc-frame{display:block;flex:1 1 auto;width:100%;height:auto;min-height:0;border:0;background:#fff}
   @media(max-width:850px){
-    .weter-doc-links{gap:7px;margin-top:16px;padding-top:12px}
+    .side > .weter-doc-links{position:static!important;width:100%;margin:18px 0 2px;padding:12px 0 2px;gap:7px;clear:both!important}
     .weter-doc-btn{padding:10px 7px}
     .weter-doc-modal{padding:8px;align-items:center}
     .weter-doc-window{width:100%;height:calc(100dvh - 16px);max-height:none;border-radius:12px}
