@@ -1,0 +1,20 @@
+/* UI-only responsive layer. No calculation or map logic. */
+:root{--ui-bg:#f5f7fa;--ui-surface:rgba(255,255,255,.94);--ui-text:#18212b;--ui-muted:#697586;--ui-border:#e3e8ee;--ui-accent:#2563eb;--ui-radius:14px;--ui-shadow:0 10px 30px rgba(15,23,42,.10)}
+html,body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ui-text)}
+button,input,select{transition:background-color .2s ease,border-color .2s ease,box-shadow .2s ease,transform .15s ease,opacity .2s ease}
+button{touch-action:manipulation}button:active{transform:translateY(1px)}
+input:focus,select:focus{outline:0;border-color:#8fb2f5;box-shadow:0 0 0 3px rgba(37,99,235,.10)}
+.advanced{transition:box-shadow .25s ease,border-color .25s ease}.advanced[open]{box-shadow:0 5px 18px rgba(15,23,42,.06)}
+.trajectory-info{backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-color:rgba(216,221,226,.85);box-shadow:0 14px 40px rgba(15,23,42,.16);animation:ui-pop .18s ease-out}
+@keyframes ui-pop{from{opacity:0;transform:translateY(5px) scale(.985)}to{opacity:1;transform:none}}
+.ui-menu-toggle{display:none}
+.ui-help{position:fixed;right:16px;bottom:16px;z-index:1200;width:40px;height:40px;border:0;border-radius:50%;background:#fff;color:#334155;box-shadow:0 5px 18px rgba(15,23,42,.14);font-weight:700;cursor:pointer}
+.ui-help-card{position:fixed;right:16px;bottom:64px;z-index:1200;width:min(320px,calc(100vw - 32px));padding:13px 15px;border:1px solid var(--ui-border);border-radius:14px;background:rgba(255,255,255,.96);box-shadow:var(--ui-shadow);font-size:12px;line-height:1.5;opacity:0;visibility:hidden;transform:translateY(8px);transition:.2s ease;pointer-events:none}.ui-help-card.open{opacity:1;visibility:visible;transform:none;pointer-events:auto}.ui-help-card strong{display:block;margin-bottom:4px;font-size:13px}
+@media(max-width:850px){
+ body{background:var(--ui-bg);overflow-x:hidden}.app{display:block;min-height:100dvh;height:auto}.side{position:fixed;left:0;top:0;bottom:0;width:min(390px,88vw);max-height:none;padding:18px 16px 24px;overflow-y:auto;background:var(--ui-surface);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:10px 0 35px rgba(15,23,42,.13);z-index:1300;transform:translateX(0);transition:transform .28s cubic-bezier(.22,.61,.36,1)}.side.ui-collapsed{transform:translateX(-105%)}
+ .map{position:fixed;inset:0;height:100dvh;width:100vw;z-index:1}.hint{display:none}
+ .ui-menu-toggle{display:flex;position:fixed;top:14px;left:14px;z-index:1400;width:44px;height:44px;align-items:center;justify-content:center;border:1px solid rgba(216,221,226,.9);border-radius:13px;background:rgba(255,255,255,.92);box-shadow:0 6px 20px rgba(15,23,42,.13);font-size:20px;cursor:pointer;backdrop-filter:blur(10px)}
+ .side:not(.ui-collapsed)~main .ui-menu-toggle{left:min(390px,88vw);transform:translateX(-58px)}
+ .side h2{font-size:22px;letter-spacing:-.02em}.tabs{gap:6px;margin:18px 0}.tabs button{min-height:44px;border-radius:11px;font-size:13px;font-weight:600}.row{gap:9px}.step{margin:18px 0 8px;font-size:13px}label{font-size:12px;margin:9px 0}input,select{min-height:42px;padding:10px;border-radius:10px;background:#fff}button.action{min-height:46px;border-radius:11px;margin-top:14px;font-weight:650}.secondary{min-height:42px;border-radius:10px}.status{font-size:12px}.result{font-size:12px}.advanced{border-radius:12px;padding:11px}.advanced summary{font-size:12px;line-height:1.4}.trajectory-info{width:min(380px,calc(100vw - 24px));max-height:70dvh;overflow:auto;padding:13px;border-radius:14px}.trajectory-chart{height:115px}.ui-help{right:14px;bottom:14px}.ui-help-card{right:14px;bottom:62px}
+}
+@media(min-width:851px){.ui-help-card{display:none}}
