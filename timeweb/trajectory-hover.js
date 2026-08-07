@@ -66,15 +66,28 @@ function installDocuments(){
   .weter-doc-links{position:fixed;left:18px;bottom:18px;z-index:12000;display:flex;gap:8px;align-items:center}
   .weter-doc-btn{border:1px solid #cbd3da;background:rgba(255,255,255,.97);color:#17202a;border-radius:9px;padding:9px 13px;font:600 12px/1.2 Inter,Arial,sans-serif;box-shadow:0 2px 10px #0002;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease,background .18s ease}
   .weter-doc-btn:hover{background:#f5f7f9;transform:translateY(-1px);box-shadow:0 4px 14px #0002}.weter-doc-btn:active{transform:translateY(0)}
-  .weter-doc-modal{position:fixed;inset:0;z-index:30000;background:rgba(15,23,42,.48);display:flex;align-items:center;justify-content:center;padding:24px;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .2s ease,visibility .2s ease}
-  .weter-doc-modal.open{opacity:1;visibility:visible;pointer-events:auto}.weter-doc-window{width:min(920px,100%);height:min(88vh,900px);background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 18px 60px #0005;transform:translateY(10px) scale(.985);transition:transform .22s ease;position:relative}.weter-doc-modal.open .weter-doc-window{transform:none}
-  .weter-doc-head{height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid #e4e8eb;background:#fff;font:600 13px/1 Inter,Arial,sans-serif}.weter-doc-close{width:32px;height:32px;border:0;border-radius:50%;background:#f1f3f5;color:#334155;font-size:20px;line-height:1;cursor:pointer}.weter-doc-frame{display:block;width:100%;height:calc(100% - 48px);border:0;background:#fff}
-  @media(max-width:850px){.weter-doc-links{left:12px;right:12px;bottom:12px;gap:7px}.weter-doc-btn{flex:1;min-width:0;padding:10px 7px}.weter-doc-modal{padding:10px}.weter-doc-window{height:90vh;border-radius:12px}.weter-doc-head{height:46px;padding:0 10px}}
+  .weter-doc-modal{position:fixed;inset:0;width:100%;height:100%;height:100dvh;z-index:30000;background:rgba(15,23,42,.48);display:flex;align-items:center;justify-content:center;padding:16px;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .2s ease,visibility .2s ease}
+  .weter-doc-modal.open{opacity:1;visibility:visible;pointer-events:auto}
+  .weter-doc-window{width:min(920px,100%);height:min(88vh,900px);height:min(88dvh,900px);max-height:calc(100dvh - 32px);background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 18px 60px #0005;transform:translateY(10px) scale(.985);transition:transform .22s ease;position:relative;display:flex;flex-direction:column}
+  .weter-doc-modal.open .weter-doc-window{transform:none}
+  .weter-doc-head{flex:0 0 48px;height:48px;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid #e4e8eb;background:#fff;font:600 13px/1 Inter,Arial,sans-serif;position:relative;z-index:2}
+  .weter-doc-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:8px}
+  .weter-doc-close{flex:0 0 34px;width:34px;height:34px;border:1px solid #d5dbe1;border-radius:50%;background:#f7f8fa;color:#334155;font-size:22px;line-height:30px;text-align:center;padding:0;cursor:pointer;box-shadow:0 1px 4px #0002;display:flex;align-items:center;justify-content:center}
+  .weter-doc-close:hover{background:#eef1f4}.weter-doc-frame{display:block;flex:1 1 auto;width:100%;height:auto;min-height:0;border:0;background:#fff}
+  @media(max-width:850px){
+    .weter-doc-links{left:12px;right:12px;bottom:12px;gap:7px}
+    .weter-doc-btn{flex:1;min-width:0;padding:10px 7px}
+    .weter-doc-modal{padding:8px;align-items:center}
+    .weter-doc-window{width:100%;height:calc(100dvh - 16px);max-height:none;border-radius:12px}
+    .weter-doc-head{flex-basis:50px;height:50px;padding:0 10px}
+    .weter-doc-close{width:38px;height:38px;flex-basis:38px;font-size:24px;line-height:34px;background:#fff;border-color:#cbd3da}
+  }
+  @media(max-width:380px){.weter-doc-head{flex-basis:46px;height:46px}.weter-doc-close{width:36px;height:36px;flex-basis:36px}.weter-doc-modal{padding:6px}.weter-doc-window{height:calc(100dvh - 12px)}}
   `;document.head.appendChild(style);
   const links=document.createElement('div');links.id='weter-docs';links.className='weter-doc-links';links.innerHTML='<button class="weter-doc-btn" data-doc="oznakomlenie.html">Ознакомиться</button><button class="weter-doc-btn" data-doc="fizika-processov.html">Физика процессов</button>';
   const modal=document.createElement('div');modal.className='weter-doc-modal';modal.innerHTML='<div class="weter-doc-window" role="dialog" aria-modal="true"><div class="weter-doc-head"><span class="weter-doc-title">Справочные материалы</span><button class="weter-doc-close" aria-label="Закрыть">×</button></div><iframe class="weter-doc-frame" title="Справочный материал"></iframe></div>';
   document.body.appendChild(links);document.body.appendChild(modal);const frame=modal.querySelector('iframe'),title=modal.querySelector('.weter-doc-title');
-  function close(){modal.classList.remove('open');document.body.style.overflow=''}
+  function close(){modal.classList.remove('open');document.body.style.overflow='';frame.src=''}
   links.querySelectorAll('[data-doc]').forEach(btn=>btn.addEventListener('click',()=>{const file=btn.dataset.doc;title.textContent=file==='fizika-processov.html'?'Физика процессов':'Ознакомление с приложением';frame.src=file;modal.classList.add('open');document.body.style.overflow='hidden'}));
   modal.querySelector('.weter-doc-close').addEventListener('click',close);modal.addEventListener('click',e=>{if(e.target===modal)close()});document.addEventListener('keydown',e=>{if(e.key==='Escape')close()});
 }
